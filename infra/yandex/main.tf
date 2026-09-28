@@ -168,9 +168,11 @@ resource "yandex_serverless_container" "webhook" {
     url = "cr.yandex/${yandex_container_registry.registry.id}/webhook:${var.webhook_image_tag}"
     environment = {
       NODE_ENV                 = "production"
-      APP_VERSION              = "6"
+      APP_VERSION              = "7"
       VK_GROUP_ID              = tostring(var.vk_group_id)
       YMQ_QUEUE_URL            = yandex_message_queue.jobs_queue.id
+      YMQ_ACCESS_KEY           = yandex_iam_service_account_static_access_key.ymq_key.access_key
+      YMQ_SECRET_KEY           = yandex_iam_service_account_static_access_key.ymq_key.secret_key
       YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
       YDB_METADATA_CREDENTIALS = "1"
@@ -230,7 +232,8 @@ resource "yandex_serverless_container" "worker" {
     url = "cr.yandex/${yandex_container_registry.registry.id}/worker:${var.worker_image_tag}"
     environment = {
       NODE_ENV                 = "production"
-      APP_VERSION              = "6"
+      APP_VERSION              = "12"
+      WORKER_PORT              = "8080"
       YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
       YDB_METADATA_CREDENTIALS = "1"

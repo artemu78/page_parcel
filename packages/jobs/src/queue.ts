@@ -43,11 +43,14 @@ export class SqsQueueClient implements QueueClient {
       attempts: job.attempts
     };
 
+    const isFifo = this.queueUrl.endsWith('.fifo');
     const command = new SendMessageCommand({
       QueueUrl: this.queueUrl,
       MessageBody: JSON.stringify(payload),
-      MessageDeduplicationId: `${job.id}_${job.attempts}`,
-      MessageGroupId: `user_${job.ownerId}`
+      ...(isFifo ? {
+        MessageDeduplicationId: `${job.id}_${job.attempts}`,
+        MessageGroupId: `user_${job.ownerId}`
+      } : {})
     });
 
     try {

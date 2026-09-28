@@ -31,10 +31,13 @@ export class BrowserManager {
       this.logger.info('Launching Chromium browser instance');
       this.browser = await chromium.launch({
         headless: true,
-        // Chromium sandbox enabled. No --no-sandbox flag.
         args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
+          '--no-zygote',
+          '--single-process',
           '--disable-extensions',
           '--disable-component-update',
           '--disable-background-networking',

@@ -79,7 +79,8 @@ export class VkApiClient {
   }
 
   public async uploadPdfDocument(uploadUrl: string, pdfBuffer: Buffer, filename: string): Promise<string> {
-    this.logger.debug(`Uploading PDF document (${pdfBuffer.length} bytes) to VK upload server`);
+    const targetUrl = uploadUrl.replace(/^http:\/\//i, 'https://');
+    this.logger.info(`Uploading PDF document (${pdfBuffer.length} bytes, file: ${filename}) to VK upload server: ${targetUrl}`);
 
     const formData = new FormData();
     const blob = new Blob([new Uint8Array(pdfBuffer)], { type: 'application/pdf' });
@@ -87,16 +88,21 @@ export class VkApiClient {
 
     let res: Response;
     try {
-      res = await fetch(uploadUrl, {
+      res = await fetch(targetUrl, {
         method: 'POST',
-        body: formData
+        body: formData,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
       });
     } catch (err) {
       throw new Error(`Failed to upload PDF to VK: ${redactSensitiveData((err as Error).message)}`);
     }
 
     if (!res.ok) {
-      throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText}`);
+      const errBody = await res.text().catch(() => '');
+      this.logger.error(`VK upload server HTTP error: ${res.status} ${res.statusText} on ${targetUrl}. Response: ${errBody.slice(0, 500)}`);
+      throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText} - ${errBody.slice(0, 200)}`);
     }
 
     const json = (await res.json()) as { file?: string; error?: string };

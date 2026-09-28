@@ -26,11 +26,18 @@ async function bootstrap() {
     jobStore = new MemoryJobStore();
   }
 
+  const ymqAccessKey = process.env.YMQ_ACCESS_KEY;
+  const ymqSecretKey = process.env.YMQ_SECRET_KEY;
+
   let queueClient;
   if (ymqQueueUrl) {
     queueClient = new SqsQueueClient({
       queueUrl: ymqQueueUrl,
-      region: process.env.AWS_REGION || 'ru-central1'
+      region: process.env.AWS_REGION || 'ru-central1',
+      credentials: (ymqAccessKey && ymqSecretKey) ? {
+        accessKeyId: ymqAccessKey,
+        secretAccessKey: ymqSecretKey
+      } : undefined
     });
   } else {
     logger.warn('YMQ_QUEUE_URL not configured, using MemoryQueueClient (local/dev mode)');
