@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /app
+
+COPY package*.json tsconfig.json ./
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+
+RUN npm ci --ignore-scripts
+RUN npm run build
+
+# Production runtime with Chromium dependencies and fonts
+FROM node:22-bookworm-slim AS runner
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV WORKER_PORT=8081
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Install Chromium dependencies, certificates, and Cyrillic/Latin fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    fonts-liberation \
+    fonts-dejavu-core \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create unprivileged pwuser (UID 10001)
+RUN groupadd -g 10001 pwuser && \
+    useradd -u 10001 -g pwuser -m -s /bin/bash pwuser && \
+    mkdir -p /ms-playwright /tmp && \
+    chown -R pwuser:pwuser /ms-playwright /tmp /app
+
+COPY package*.json ./
+COPY --from=builder --chown=pwuser:pwuser /app/packages/ ./packages/
+COPY --from=builder --chown=pwuser:pwuser /app/apps/ ./apps/
+
+# Install dependencies and download Chromium binary
+RUN npm ci --omit=dev --ignore-scripts && \
+    npx playwright install --with-deps chromium && \
+    chown -R pwuser:pwuser /ms-playwright
+
+USER pwuser
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://localhost:8081/healthz').then(r => r.ok ? process.exit(0) : process.exit(1))"
+
+CMD ["node", "apps/worker/dist/index.js"]

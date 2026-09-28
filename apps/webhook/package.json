@@ -1,0 +1,16 @@
+{
+  "name": "@readable-web/webhook",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@readable-web/jobs": "*",
+    "@readable-web/observability": "*",
+    "@readable-web/safe-network": "*",
+    "@readable-web/vk": "*"
+  }
+}

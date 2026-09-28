@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "references": [
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/safe-network" },
+    { "path": "../../packages/jobs" },
+    { "path": "../../packages/vk" }
+  ],
+  "include": ["src/**/*"]
+}

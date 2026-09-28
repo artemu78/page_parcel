@@ -1,0 +1,20 @@
+{
+  "name": "@readable-web/rendering",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "@readable-web/observability": "*",
+    "@readable-web/safe-network": "*",
+    "jsdom": "^26.0.0",
+    "playwright": "^1.50.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7"
+  }
+}

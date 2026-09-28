@@ -1,0 +1,18 @@
+{
+  "name": "@readable-web/worker",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@readable-web/jobs": "*",
+    "@readable-web/observability": "*",
+    "@readable-web/pdf": "*",
+    "@readable-web/rendering": "*",
+    "@readable-web/safe-network": "*",
+    "@readable-web/vk": "*"
+  }
+}

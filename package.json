@@ -1,0 +1,27 @@
+{
+  "name": "readable-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-minded VK community bot for converting public web articles to readable PDFs",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --if-present build",
+    "test": "node --test --import tsx 'tests/**/*.test.ts'",
+    "test:unit": "node --test --import tsx 'tests/unit/**/*.test.ts'",
+    "test:integration": "node --test --import tsx 'tests/integration/**/*.test.ts'",
+    "test:security": "node --test --import tsx 'tests/security/**/*.test.ts'",
+    "typecheck": "tsc --build --verbose",
+    "clean": "rm -rf dist packages/*/dist apps/*/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
