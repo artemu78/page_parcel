@@ -194,68 +194,71 @@ Manage your cloud resources and containers using only standard **Terraform CLI**
 
 All Terraform commands are run from the [`infra/yandex/`](file:///Users/artemreva/projects/proxy_pdf/infra/yandex/) directory.
 
-* **Preview changes without applying:**
-  ```bash
-  cd infra/yandex
-  terraform plan
-  ```
-* **Provision or update cloud resources:**
-  ```bash
-  cd infra/yandex
-  terraform apply
-  ```
-  *(Type `yes` when prompted).*
+### A. Initial Setup: Create Container Registry First
 
-* **View deployed resource IDs and endpoints:**
-  ```bash
-  cd infra/yandex
-  terraform output
-  ```
-  - `webhook_url`: The public HTTPS URL to paste into VK Callback API settings.
-  - `registry_id`: The Container Registry ID for Docker tagging.
+Because Serverless Containers require the Docker images to already exist in the registry when created, we provision the **Container Registry** first:
 
-* **Tear down all cloud resources (cleanup / stop incurring costs):**
-  ```bash
-  cd infra/yandex
-  terraform destroy
-  ```
+1. **Create only the Container Registry:**
+   ```bash
+   cd infra/yandex
+   terraform apply -target=yandex_container_registry.registry
+   ```
+   *(Type `yes` when prompted).*
+
+2. **Retrieve the created Registry ID:**
+   ```bash
+   terraform output -raw registry_id
+   ```
 
 ---
 
 ### B. Building & Pushing Docker Images (via Docker)
 
-Run these commands from the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
+From the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
 
-1. **Log in to Yandex Container Registry** (using your `authorized_key.json` without `yc` CLI):
+1. **Log in Docker to Yandex Container Registry** (using `authorized_key.json`):
    ```bash
    cat infra/yandex/authorized_key.json | docker login --username json_key --password-stdin cr.yandex
    ```
 
-2. **Get your Registry ID:**
+2. **Get your Registry ID into a shell variable:**
    ```bash
    REGISTRY_ID=$(terraform -chdir=infra/yandex output -raw registry_id)
    ```
 
 3. **Build the container images:**
    ```bash
-   # Build Webhook container image
    docker build -t cr.yandex/$REGISTRY_ID/webhook:latest -f infra/containers/Dockerfile.webhook .
-
-   # Build Worker container image (with sandboxed Chromium & Cyrillic fonts)
    docker build -t cr.yandex/$REGISTRY_ID/worker:latest -f infra/containers/Dockerfile.worker .
    ```
 
-4. **Push images to Yandex Container Registry:**
+4. **Push the images:**
    ```bash
    docker push cr.yandex/$REGISTRY_ID/webhook:latest
    docker push cr.yandex/$REGISTRY_ID/worker:latest
    ```
 
-5. **Deploy the updated container images:**
-   ```bash
-   cd infra/yandex
-   terraform apply
-   ```
+---
+
+### C. Deploy Full Infrastructure
+
+Now that the images are in the registry, deploy the remaining containers, queues, database, and trigger:
+
+```bash
+cd infra/yandex
+terraform apply
+```
+
+To view your deployed Webhook URL:
+```bash
+terraform output -raw webhook_url
+```
+
+To destroy all cloud resources when done:
+```bash
+cd infra/yandex
+terraform destroy
+```
 
 ---
 
