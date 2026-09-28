@@ -9,8 +9,9 @@ terraform {
 }
 
 provider "yandex" {
-  folder_id = var.folder_id
-  zone      = var.zone
+  folder_id                = var.folder_id
+  zone                     = var.zone
+  service_account_key_file = var.service_account_key_file
 }
 
 # 1. Container Registry
@@ -22,7 +23,7 @@ resource "yandex_container_registry" "registry" {
 # 2. Service Accounts & Least-Privilege IAM Roles
 resource "yandex_iam_service_account" "webhook_sa" {
   name        = "readable-web-webhook-sa"
-  description = "Service account for Webhook Serverless Container"
+  description = "Service account for Webhook Serverless Container and YMQ access"
 }
 
 resource "yandex_iam_service_account" "worker_sa" {
@@ -69,6 +70,12 @@ resource "yandex_resourcemanager_folder_iam_member" "trigger_ymq_reader" {
   member    = "serviceAccount:${yandex_iam_service_account.trigger_sa.id}"
 }
 
+# Static Access Key for Webhook SA (Required for YMQ SQS-compatible API)
+resource "yandex_iam_service_account_static_access_key" "ymq_key" {
+  service_account_id = yandex_iam_service_account.webhook_sa.id
+  description        = "Static access key for YMQ operations"
+}
+
 # 3. Yandex Lockbox Secrets
 resource "yandex_lockbox_secret" "vk_secrets" {
   name        = "readable-web-vk-secrets"
@@ -98,13 +105,17 @@ resource "yandex_ydb_database_serverless" "db" {
 # 5. Yandex Message Queue (YMQ) & Dead Letter Queue (DLQ)
 resource "yandex_message_queue" "dlq" {
   name                      = "readable-web-dlq"
+  access_key                = yandex_iam_service_account_static_access_key.ymq_key.access_key
+  secret_key                = yandex_iam_service_account_static_access_key.ymq_key.secret_key
   message_retention_seconds = 1209600 # 14 days
 }
 
 resource "yandex_message_queue" "jobs_queue" {
-  name                      = "readable-web-jobs"
-  visibility_timeout_seconds = 150 # Covers maximum 120s worker job deadline + startup buffer
-  message_retention_seconds = 86400 # 24 hours
+  name                       = "readable-web-jobs"
+  access_key                 = yandex_iam_service_account_static_access_key.ymq_key.access_key
+  secret_key                 = yandex_iam_service_account_static_access_key.ymq_key.secret_key
+  visibility_timeout_seconds = 150   # Covers maximum 120s worker job deadline + startup buffer
+  message_retention_seconds  = 86400 # 24 hours
   redrive_policy = jsonencode({
     deadLetterTargetArn = yandex_message_queue.dlq.arn
     maxReceiveCount     = 3
@@ -122,7 +133,7 @@ resource "yandex_serverless_container" "webhook" {
   service_account_id = yandex_iam_service_account.webhook_sa.id
 
   image {
-    url = "${yandex_container_registry.registry.status[0].default_repository_name}/webhook:${var.webhook_image_tag}"
+    url = "cr.yandex/${yandex_container_registry.registry.id}/webhook:${var.webhook_image_tag}"
     environment = {
       NODE_ENV      = "production"
       VK_GROUP_ID   = tostring(var.vk_group_id)
@@ -130,28 +141,31 @@ resource "yandex_serverless_container" "webhook" {
       YDB_ENDPOINT  = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE  = yandex_ydb_database_serverless.db.database_path
     }
-    secrets {
-      id                   = yandex_lockbox_secret.vk_secrets.id
-      version_id           = "latest"
-      key                  = "vk_secret"
-      environment_variable = "VK_SECRET"
-    }
-    secrets {
-      id                   = yandex_lockbox_secret.vk_secrets.id
-      version_id           = "latest"
-      key                  = "vk_confirmation_code"
-      environment_variable = "VK_CONFIRMATION_CODE"
-    }
-    secrets {
-      id                   = yandex_lockbox_secret.vk_secrets.id
-      version_id           = "latest"
-      key                  = "vk_group_token"
-      environment_variable = "VK_GROUP_TOKEN"
-    }
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = "latest"
+    key                  = "vk_secret"
+    environment_variable = "VK_SECRET"
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = "latest"
+    key                  = "vk_confirmation_code"
+    environment_variable = "VK_CONFIRMATION_CODE"
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = "latest"
+    key                  = "vk_group_token"
+    environment_variable = "VK_GROUP_TOKEN"
   }
 }
 
-# Make Webhook Container publicly reachable by VK
+# Make Webhook Container publicly reachable by VK Callback API
 resource "yandex_serverless_container_iam_binding" "webhook_public" {
   container_id = yandex_serverless_container.webhook.id
   role         = "serverless.containers.invoker"
@@ -169,18 +183,19 @@ resource "yandex_serverless_container" "worker" {
   service_account_id = yandex_iam_service_account.worker_sa.id
 
   image {
-    url = "${yandex_container_registry.registry.status[0].default_repository_name}/worker:${var.worker_image_tag}"
+    url = "cr.yandex/${yandex_container_registry.registry.id}/worker:${var.worker_image_tag}"
     environment = {
       NODE_ENV     = "production"
       YDB_ENDPOINT = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE = yandex_ydb_database_serverless.db.database_path
     }
-    secrets {
-      id                   = yandex_lockbox_secret.vk_secrets.id
-      version_id           = "latest"
-      key                  = "vk_group_token"
-      environment_variable = "VK_GROUP_TOKEN"
-    }
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = "latest"
+    key                  = "vk_group_token"
+    environment_variable = "VK_GROUP_TOKEN"
   }
 }
 
@@ -208,3 +223,9 @@ output "webhook_url" {
   value       = yandex_serverless_container.webhook.url
   description = "Public URL for VK Callback API configuration"
 }
+
+output "registry_id" {
+  value       = yandex_container_registry.registry.id
+  description = "Container Registry ID for docker push"
+}
+

@@ -7,3 +7,9 @@ dist
 /tmp
 coverage
 *.tsbuildinfo
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*key*.json
+.terraform/

@@ -31,3 +31,10 @@ variable "worker_image_tag" {
   description = "Container image tag for worker"
   default     = "latest"
 }
+
+variable "service_account_key_file" {
+  type        = string
+  description = "Path to the service account key JSON file downloaded from the Yandex Cloud web console"
+  default     = null
+}
+

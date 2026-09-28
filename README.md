@@ -183,3 +183,98 @@ node apps/worker/dist/index.js
 | **End-to-End Smoke Test** | **Verified (Local Mock)** | Full pipeline from command to queue to PDF generation to delivery |
 | **Live Yandex Cloud Deployment** | **Unverified (Requires Cloud)** | Reproducible Terraform and Dockerfiles provided in `infra/` |
 | **Live VK Messenger Delivery** | **Unverified (Requires Token)** | Complete official API client implemented; awaiting real VK group token |
+
+---
+
+## 7. Console & CLI Operations Guide (No Yandex Software Required)
+
+Manage your cloud resources and containers using only standard **Terraform CLI** and **Docker**.
+
+### A. Infrastructure Management (via Terraform)
+
+All Terraform commands are run from the [`infra/yandex/`](file:///Users/artemreva/projects/proxy_pdf/infra/yandex/) directory.
+
+* **Preview changes without applying:**
+  ```bash
+  cd infra/yandex
+  terraform plan
+  ```
+* **Provision or update cloud resources:**
+  ```bash
+  cd infra/yandex
+  terraform apply
+  ```
+  *(Type `yes` when prompted).*
+
+* **View deployed resource IDs and endpoints:**
+  ```bash
+  cd infra/yandex
+  terraform output
+  ```
+  - `webhook_url`: The public HTTPS URL to paste into VK Callback API settings.
+  - `registry_id`: The Container Registry ID for Docker tagging.
+
+* **Tear down all cloud resources (cleanup / stop incurring costs):**
+  ```bash
+  cd infra/yandex
+  terraform destroy
+  ```
+
+---
+
+### B. Building & Pushing Docker Images (via Docker)
+
+Run these commands from the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
+
+1. **Log in to Yandex Container Registry** (using your `authorized_key.json` without `yc` CLI):
+   ```bash
+   cat infra/yandex/authorized_key.json | docker login --username json_key --password-stdin cr.yandex
+   ```
+
+2. **Get your Registry ID:**
+   ```bash
+   REGISTRY_ID=$(terraform -chdir=infra/yandex output -raw registry_id)
+   ```
+
+3. **Build the container images:**
+   ```bash
+   # Build Webhook container image
+   docker build -t cr.yandex/$REGISTRY_ID/webhook:latest -f infra/containers/Dockerfile.webhook .
+
+   # Build Worker container image (with sandboxed Chromium & Cyrillic fonts)
+   docker build -t cr.yandex/$REGISTRY_ID/worker:latest -f infra/containers/Dockerfile.worker .
+   ```
+
+4. **Push images to Yandex Container Registry:**
+   ```bash
+   docker push cr.yandex/$REGISTRY_ID/webhook:latest
+   docker push cr.yandex/$REGISTRY_ID/worker:latest
+   ```
+
+5. **Deploy the updated container images:**
+   ```bash
+   cd infra/yandex
+   terraform apply
+   ```
+
+---
+
+### C. Managing Secrets in Yandex Lockbox (via Web Console)
+
+Once Terraform creates the secret `readable-web-vk-secrets`:
+1. Open [console.yandex.cloud](https://console.yandex.cloud) in your browser.
+2. Go to **Lockbox** in the left menu.
+3. Click on **`readable-web-vk-secrets`** and click **Create version** (Создать версию):
+   - Key: `vk_secret` → Value: *(your Callback API secret)*
+   - Key: `vk_confirmation_code` → Value: *(your Callback API confirmation string)*
+   - Key: `vk_group_token` → Value: *(your VK Community Access Token)*
+4. Click **Save**. The Serverless Containers will automatically load these secrets into environment variables at runtime.
+
+---
+
+### D. Monitoring & Troubleshooting (via Web Console)
+
+* **View Logs in Real Time:** Open [console.yandex.cloud](https://console.yandex.cloud) ➔ **Serverless Containers** ➔ Select `readable-web-webhook` or `readable-web-worker` ➔ Click **Logs** (Логи).
+* **Inspect Queues & Dead Letters:** Go to **Cloud Message Queue** ➔ Check message count in `readable-web-jobs` and `readable-web-dlq`.
+* **Inspect Job Metadata & States:** Go to **Managed Service for YDB** ➔ `readable-web-ydb` ➔ **Navigation** ➔ View entries in the `jobs` table.
+
