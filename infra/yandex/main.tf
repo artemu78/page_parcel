@@ -96,24 +96,9 @@ resource "yandex_lockbox_secret" "vk_secrets" {
   folder_id   = var.folder_id
 }
 
-# Initial secret version with placeholder values so version 'latest' exists for container revisions
-resource "yandex_lockbox_secret_version" "vk_secrets_initial" {
+# Read active version dynamically from Lockbox
+data "yandex_lockbox_secret" "vk_secrets" {
   secret_id = yandex_lockbox_secret.vk_secrets.id
-
-  entries {
-    key        = "vk_secret"
-    text_value = "placeholder_secret"
-  }
-
-  entries {
-    key        = "vk_confirmation_code"
-    text_value = "placeholder_code"
-  }
-
-  entries {
-    key        = "vk_group_token"
-    text_value = "placeholder_token"
-  }
 }
 
 # Grant payload viewer to SAs
@@ -189,27 +174,26 @@ resource "yandex_serverless_container" "webhook" {
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "vk_secret"
     environment_variable = "VK_SECRET"
   }
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "vk_confirmation_code"
     environment_variable = "VK_CONFIRMATION_CODE"
   }
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "vk_group_token"
     environment_variable = "VK_GROUP_TOKEN"
   }
 
   depends_on = [
-    yandex_lockbox_secret_version.vk_secrets_initial,
     yandex_resourcemanager_folder_iam_member.webhook_lockbox,
     yandex_resourcemanager_folder_iam_member.webhook_cr_puller,
     yandex_message_queue.jobs_queue
@@ -245,13 +229,12 @@ resource "yandex_serverless_container" "worker" {
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "vk_group_token"
     environment_variable = "VK_GROUP_TOKEN"
   }
 
   depends_on = [
-    yandex_lockbox_secret_version.vk_secrets_initial,
     yandex_resourcemanager_folder_iam_member.worker_lockbox,
     yandex_resourcemanager_folder_iam_member.worker_cr_puller
   ]
