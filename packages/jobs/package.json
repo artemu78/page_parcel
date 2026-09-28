@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.716.0",
-    "@readable-web/observability": "*"
+    "@readable-web/observability": "*",
+    "@yandex-cloud/nodejs-sdk": "^2.9.3",
+    "ydb-sdk": "^5.11.1"
   }
 }

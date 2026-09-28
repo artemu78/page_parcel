@@ -1,6 +1,6 @@
 import { defaultLogger } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
-import { MemoryJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
+import { MemoryJobStore, YdbJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
 import { WebhookHandler } from './handler.js';
 import { WebhookServer } from './server.js';
 
@@ -12,8 +12,19 @@ async function bootstrap() {
   const confirmationCode = process.env.VK_CONFIRMATION_CODE || '';
   const vkToken = process.env.VK_GROUP_TOKEN || '';
   const ymqQueueUrl = process.env.YMQ_QUEUE_URL || '';
+  const ydbEndpoint = process.env.YDB_ENDPOINT;
+  const ydbDatabase = process.env.YDB_DATABASE;
 
-  const jobStore = new MemoryJobStore();
+  let jobStore;
+  if (ydbEndpoint && ydbDatabase) {
+    logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
+    const ydbStore = new YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+    await ydbStore.init();
+    jobStore = ydbStore;
+  } else {
+    logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
+    jobStore = new MemoryJobStore();
+  }
 
   let queueClient;
   if (ymqQueueUrl) {

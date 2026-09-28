@@ -154,21 +154,26 @@ resource "yandex_message_queue" "jobs_queue" {
 resource "yandex_serverless_container" "webhook" {
   name               = "readable-web-webhook"
   folder_id          = var.folder_id
-  memory             = 256
+  memory             = 512
   cores              = 1
-  core_fraction      = 25
-  execution_timeout  = "3s"
+  core_fraction      = 100
+  execution_timeout  = "15s"
   service_account_id = yandex_iam_service_account.webhook_sa.id
+
+  metadata_options {
+    gce_http_endpoint = 1
+  }
 
   image {
     url = "cr.yandex/${yandex_container_registry.registry.id}/webhook:${var.webhook_image_tag}"
     environment = {
-      NODE_ENV      = "production"
-      APP_VERSION  = "3"
-      VK_GROUP_ID   = tostring(var.vk_group_id)
-      YMQ_QUEUE_URL = yandex_message_queue.jobs_queue.id
-      YDB_ENDPOINT  = yandex_ydb_database_serverless.db.ydb_api_endpoint
-      YDB_DATABASE  = yandex_ydb_database_serverless.db.database_path
+      NODE_ENV                 = "production"
+      APP_VERSION              = "6"
+      VK_GROUP_ID              = tostring(var.vk_group_id)
+      YMQ_QUEUE_URL            = yandex_message_queue.jobs_queue.id
+      YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
+      YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
+      YDB_METADATA_CREDENTIALS = "1"
     }
   }
 
@@ -217,13 +222,18 @@ resource "yandex_serverless_container" "worker" {
   execution_timeout  = "120s"
   service_account_id = yandex_iam_service_account.worker_sa.id
 
+  metadata_options {
+    gce_http_endpoint = 1
+  }
+
   image {
     url = "cr.yandex/${yandex_container_registry.registry.id}/worker:${var.worker_image_tag}"
     environment = {
-      NODE_ENV     = "production"
-      APP_VERSION  = "3"
-      YDB_ENDPOINT = yandex_ydb_database_serverless.db.ydb_api_endpoint
-      YDB_DATABASE = yandex_ydb_database_serverless.db.database_path
+      NODE_ENV                 = "production"
+      APP_VERSION              = "6"
+      YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
+      YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
+      YDB_METADATA_CREDENTIALS = "1"
     }
   }
 

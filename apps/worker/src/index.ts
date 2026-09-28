@@ -1,6 +1,6 @@
 import { defaultLogger } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
-import { MemoryJobStore } from '@readable-web/jobs';
+import { MemoryJobStore, YdbJobStore } from '@readable-web/jobs';
 import { JobProcessor } from './job-processor.js';
 import { WorkerServer } from './server.js';
 
@@ -9,8 +9,19 @@ async function bootstrap() {
 
   const vkToken = process.env.VK_GROUP_TOKEN || '';
   const triggerSecret = process.env.TRIGGER_SECRET;
+  const ydbEndpoint = process.env.YDB_ENDPOINT;
+  const ydbDatabase = process.env.YDB_DATABASE;
 
-  const jobStore = new MemoryJobStore();
+  let jobStore;
+  if (ydbEndpoint && ydbDatabase) {
+    logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
+    const ydbStore = new YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+    await ydbStore.init();
+    jobStore = ydbStore;
+  } else {
+    logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
+    jobStore = new MemoryJobStore();
+  }
   const vkClient = vkToken ? new VkApiClient({ token: vkToken }) : undefined;
 
   const processor = new JobProcessor({
