@@ -36,10 +36,10 @@ resource "yandex_iam_service_account" "trigger_sa" {
   description = "Service account for YMQ Trigger"
 }
 
-# Grant YMQ writer to webhook SA
-resource "yandex_resourcemanager_folder_iam_member" "webhook_ymq_writer" {
+# Grant YMQ admin to webhook SA (allows creating/configuring queues and writing messages)
+resource "yandex_resourcemanager_folder_iam_member" "webhook_ymq_admin" {
   folder_id = var.folder_id
-  role      = "ymq.writer"
+  role      = "ymq.admin"
   member    = "serviceAccount:${yandex_iam_service_account.webhook_sa.id}"
 }
 
@@ -53,6 +53,19 @@ resource "yandex_resourcemanager_folder_iam_member" "webhook_ydb_editor" {
 resource "yandex_resourcemanager_folder_iam_member" "worker_ydb_editor" {
   folder_id = var.folder_id
   role      = "ydb.editor"
+  member    = "serviceAccount:${yandex_iam_service_account.worker_sa.id}"
+}
+
+# Grant Container Registry Puller to webhook and worker SAs
+resource "yandex_resourcemanager_folder_iam_member" "webhook_cr_puller" {
+  folder_id = var.folder_id
+  role      = "container-registry.images.puller"
+  member    = "serviceAccount:${yandex_iam_service_account.webhook_sa.id}"
+}
+
+resource "yandex_resourcemanager_folder_iam_member" "worker_cr_puller" {
+  folder_id = var.folder_id
+  role      = "container-registry.images.puller"
   member    = "serviceAccount:${yandex_iam_service_account.worker_sa.id}"
 }
 
@@ -83,6 +96,26 @@ resource "yandex_lockbox_secret" "vk_secrets" {
   folder_id   = var.folder_id
 }
 
+# Initial secret version with placeholder values so version 'latest' exists for container revisions
+resource "yandex_lockbox_secret_version" "vk_secrets_initial" {
+  secret_id = yandex_lockbox_secret.vk_secrets.id
+
+  entries {
+    key        = "vk_secret"
+    text_value = "placeholder_secret"
+  }
+
+  entries {
+    key        = "vk_confirmation_code"
+    text_value = "placeholder_code"
+  }
+
+  entries {
+    key        = "vk_group_token"
+    text_value = "placeholder_token"
+  }
+}
+
 # Grant payload viewer to SAs
 resource "yandex_resourcemanager_folder_iam_member" "webhook_lockbox" {
   folder_id = var.folder_id
@@ -108,6 +141,11 @@ resource "yandex_message_queue" "dlq" {
   access_key                = yandex_iam_service_account_static_access_key.ymq_key.access_key
   secret_key                = yandex_iam_service_account_static_access_key.ymq_key.secret_key
   message_retention_seconds = 1209600 # 14 days
+
+  depends_on = [
+    yandex_resourcemanager_folder_iam_member.webhook_ymq_admin,
+    yandex_iam_service_account_static_access_key.ymq_key
+  ]
 }
 
 resource "yandex_message_queue" "jobs_queue" {
@@ -120,6 +158,11 @@ resource "yandex_message_queue" "jobs_queue" {
     deadLetterTargetArn = yandex_message_queue.dlq.arn
     maxReceiveCount     = 3
   })
+
+  depends_on = [
+    yandex_resourcemanager_folder_iam_member.webhook_ymq_admin,
+    yandex_message_queue.dlq
+  ]
 }
 
 # 6. Webhook Serverless Container (Public Ingress)
@@ -136,6 +179,7 @@ resource "yandex_serverless_container" "webhook" {
     url = "cr.yandex/${yandex_container_registry.registry.id}/webhook:${var.webhook_image_tag}"
     environment = {
       NODE_ENV      = "production"
+      APP_VERSION  = "3"
       VK_GROUP_ID   = tostring(var.vk_group_id)
       YMQ_QUEUE_URL = yandex_message_queue.jobs_queue.id
       YDB_ENDPOINT  = yandex_ydb_database_serverless.db.ydb_api_endpoint
@@ -145,24 +189,31 @@ resource "yandex_serverless_container" "webhook" {
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = "latest"
+    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
     key                  = "vk_secret"
     environment_variable = "VK_SECRET"
   }
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = "latest"
+    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
     key                  = "vk_confirmation_code"
     environment_variable = "VK_CONFIRMATION_CODE"
   }
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = "latest"
+    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
     key                  = "vk_group_token"
     environment_variable = "VK_GROUP_TOKEN"
   }
+
+  depends_on = [
+    yandex_lockbox_secret_version.vk_secrets_initial,
+    yandex_resourcemanager_folder_iam_member.webhook_lockbox,
+    yandex_resourcemanager_folder_iam_member.webhook_cr_puller,
+    yandex_message_queue.jobs_queue
+  ]
 }
 
 # Make Webhook Container publicly reachable by VK Callback API
@@ -186,6 +237,7 @@ resource "yandex_serverless_container" "worker" {
     url = "cr.yandex/${yandex_container_registry.registry.id}/worker:${var.worker_image_tag}"
     environment = {
       NODE_ENV     = "production"
+      APP_VERSION  = "3"
       YDB_ENDPOINT = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE = yandex_ydb_database_serverless.db.database_path
     }
@@ -193,10 +245,16 @@ resource "yandex_serverless_container" "worker" {
 
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
-    version_id           = "latest"
+    version_id           = yandex_lockbox_secret_version.vk_secrets_initial.id
     key                  = "vk_group_token"
     environment_variable = "VK_GROUP_TOKEN"
   }
+
+  depends_on = [
+    yandex_lockbox_secret_version.vk_secrets_initial,
+    yandex_resourcemanager_folder_iam_member.worker_lockbox,
+    yandex_resourcemanager_folder_iam_member.worker_cr_puller
+  ]
 }
 
 # 8. YMQ Trigger invoking Worker Container
@@ -215,7 +273,6 @@ resource "yandex_function_trigger" "ymq_trigger" {
   container {
     id                 = yandex_serverless_container.worker.id
     service_account_id = yandex_iam_service_account.trigger_sa.id
-    retry_attempts     = "0" # Retry managed directly via YMQ visibility timeout & DLQ
   }
 }
 
@@ -228,4 +285,3 @@ output "registry_id" {
   value       = yandex_container_registry.registry.id
   description = "Container Registry ID for docker push"
 }
-
