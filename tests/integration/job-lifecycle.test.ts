@@ -400,4 +400,38 @@ describe('Integration - Job Lifecycle and Recovery', () => {
 
     await worker.close();
   });
+
+  it('responds to /version command with service version', async () => {
+    process.env.APP_VERSION = 'v1.2.3-test (abc1234)';
+    try {
+      const payload = {
+        type: 'message_new',
+        group_id: 12345,
+        secret: 'secret_123',
+        event_id: 'evt_version_test',
+        object: {
+          message: {
+            id: 99,
+            date: 1600000000,
+            peer_id: 200,
+            from_id: 200,
+            text: '/version'
+          }
+        }
+      };
+
+      const res = await webhook.handleRequest(payload);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body, 'ok');
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const versionMsg = mockVk.sentMessages.find(m => m.peerId === 200 && m.message.includes('Версия сервиса'));
+      assert.ok(versionMsg !== undefined);
+      assert.ok(versionMsg.message.includes('v1.2.3-test (abc1234)'));
+    } finally {
+      delete process.env.APP_VERSION;
+    }
+  });
 });
+

@@ -37,7 +37,7 @@ export class BrowserManager {
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
-          '--single-process',
+          ...(process.platform === 'linux' ? ['--single-process'] : []),
           '--disable-extensions',
           '--disable-component-update',
           '--disable-background-networking',

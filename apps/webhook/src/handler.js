@@ -55,6 +55,10 @@ class WebhookHandler {
                 await this.sendReply(peerId, commands_js_1.HELP_MESSAGE, `help_${msg.id}`);
                 break;
             }
+            case 'version': {
+                await this.sendReply(peerId, (0, commands_js_1.formatVersionMessage)(), `version_${msg.id}`);
+                break;
+            }
             case 'status': {
                 await this.handleStatusCommand(peerId, fromId, command.jobId, msg.id);
                 break;

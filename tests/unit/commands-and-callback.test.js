@@ -60,10 +60,21 @@ const index_js_1 = require("../../packages/vk/dist/index.js");
             jobId: 'job_btn_999'
         });
     });
+    (0, node_test_1.it)('parses /version command, synonyms, and payload', () => {
+        assert.deepEqual((0, commands_js_1.parseCommand)('/version'), { type: 'version' });
+        assert.deepEqual((0, commands_js_1.parseCommand)('/версия'), { type: 'version' });
+        assert.deepEqual((0, commands_js_1.parseCommand)('версия'), { type: 'version' });
+        const payload = JSON.stringify({ command: 'version' });
+        assert.deepEqual((0, commands_js_1.parseCommand)('показать версию', payload), { type: 'version' });
+        const msg = (0, commands_js_1.formatVersionMessage)();
+        assert.ok(msg.includes('Версия сервиса Readable Web:'));
+        assert.ok(msg.includes('Среда:'));
+    });
     (0, node_test_1.it)('parses /help command and synonyms', () => {
         assert.deepEqual((0, commands_js_1.parseCommand)('/help'), { type: 'help' });
         assert.deepEqual((0, commands_js_1.parseCommand)('?'), { type: 'help' });
         assert.deepEqual((0, commands_js_1.parseCommand)('помощь'), { type: 'help' });
+        assert.ok(commands_js_1.HELP_MESSAGE.includes('/version'));
     });
     (0, node_test_1.it)('treats unrecognized text properly', () => {
         const res = (0, commands_js_1.parseCommand)('hello world');

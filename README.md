@@ -9,6 +9,7 @@ Production-minded MVP of a VK community bot that converts public web articles an
 * **User Interaction:**
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
+  * `/version`: Reports the running service version, git commit, build timestamp, and runtime environment.
   * `/help`: Displays service usage, capabilities, and limitations.
 * **Scope Boundaries:**
   * **Read-only web-to-PDF:** Target public articles and documentation.
@@ -328,4 +329,17 @@ UPDATE Users SET Status = 0 WHERE ID = 123456789;
 * **Inspect Job Metadata & States:** Go to **Managed Service for YDB** ➔ `readable-web-ydb` ➔ **Navigation** ➔ View entries in the `jobs` table.
 * **Inspect Users & Roles:** In **Managed Service for YDB** ➔ `readable-web-ydb` ➔ View entries in `Users` and `Roles` tables.
 * **Inspect Runtime Settings:** In **Managed Service for YDB** ➔ `readable-web-ydb` ➔ View entries in the `Settings` table.
+
+---
+
+### H. Application Versioning (`/version` command)
+
+* **Source of Truth:** The canonical application version is kept in the root [`package.json`](package.json) (e.g. `"version": "1.0.0"`).
+* **Build & Deploy Injection:** During deployment with [`scripts/deploy.sh`](scripts/deploy.sh), the script automatically reads `package.json` and the current git commit (`git rev-parse --short HEAD`), constructing a release identifier (e.g. `v1.0.0 (c4146a8)`), which is passed to Terraform and set as the `APP_VERSION` environment variable in the running containers.
+* **Checking Version at Runtime:** Send `/version` (or `/версия`) to the VK community bot in direct messages. The bot will respond with the deployed version and runtime environment details:
+  ```text
+  📦 Версия сервиса Readable Web: v1.0.0 (c4146a8)
+  ⚙️ Среда: production (v22.x.x)
+  ```
+
 

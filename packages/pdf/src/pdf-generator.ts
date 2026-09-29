@@ -35,7 +35,7 @@ export class PdfGenerator {
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
-          '--single-process',
+          ...(process.platform === 'linux' ? ['--single-process'] : []),
           '--disable-extensions',
           '--disable-background-networking'
         ]

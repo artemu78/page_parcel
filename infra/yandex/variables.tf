@@ -38,3 +38,10 @@ variable "service_account_key_file" {
   default     = null
 }
 
+variable "app_version" {
+  type        = string
+  description = "Application version string"
+  default     = "1.0.0"
+}
+
+

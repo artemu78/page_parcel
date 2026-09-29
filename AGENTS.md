@@ -36,6 +36,7 @@ Some existing design and operations statements may be ahead of or inconsistent w
 - Preserve owner-only status access, deduplication, lease/fencing checks, and attachment checkpoints when changing job processing.
 - Treat submitted URLs and retrieved pages as untrusted. Evaluate changes against the threat model and relevant security tests.
 - Keep credentials and private payloads out of committed files, logs, and reports. Use placeholders in documentation.
+- Bump version in package.json once changes are done.
 - Use Context7 for current library, framework, SDK, API, CLI, or cloud-service documentation: resolve the library ID first, then query the relevant concept. This is unnecessary for general programming, business-logic debugging, or code review alone. If unavailable, state that limitation and use official documentation.
 
 ## Verification and documentation

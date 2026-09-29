@@ -46,13 +46,17 @@ if [ -z "$REGISTRY_ID" ]; then
 fi
 echo "📦 Registry ID: $REGISTRY_ID"
 
-# 5. Generate unique image tag
+# 5. Generate unique image tag and resolve application version
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "app")
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 TAG="${TAG:-${GIT_SHA}-${TIMESTAMP}}"
 echo "🏷️ Image Tag: $TAG"
 
-TF_VARS=()
+PKG_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")
+APP_VERSION="${APP_VERSION:-v${PKG_VERSION} (${GIT_SHA})}"
+echo "📦 App Version: $APP_VERSION"
+
+TF_VARS=("-var=app_version=$APP_VERSION")
 
 # 6. Build and Push Webhook if selected
 if [[ "$TARGET" == "webhook" || "$TARGET" == "all" ]]; then
@@ -94,6 +98,7 @@ terraform -chdir=infra/yandex apply "${TF_VARS[@]}" -auto-approve
 echo ""
 echo "=================================================="
 echo "✅ Deployment finished successfully!"
+echo "📦 Deployed version [$APP_VERSION]"
 WEBHOOK_URL=$(terraform -chdir=infra/yandex output -raw webhook_url 2>/dev/null || true)
 if [ -n "$WEBHOOK_URL" ]; then
   echo "🌐 Webhook URL: $WEBHOOK_URL"

@@ -10,7 +10,7 @@ import {
 import { validateUrlSyntax } from '@readable-web/safe-network';
 import { JobStore, OutboxService } from '@readable-web/jobs';
 import { Logger, defaultLogger, metrics } from '@readable-web/observability';
-import { parseCommand, HELP_MESSAGE } from './commands.js';
+import { parseCommand, HELP_MESSAGE, formatVersionMessage } from './commands.js';
 
 export interface WebhookHandlerOptions {
   jobStore: JobStore;
@@ -81,6 +81,11 @@ export class WebhookHandler {
     switch (command.type) {
       case 'help': {
         await this.sendReply(peerId, HELP_MESSAGE, `help_${msg.id}`);
+        break;
+      }
+
+      case 'version': {
+        await this.sendReply(peerId, formatVersionMessage(), `version_${msg.id}`);
         break;
       }
 

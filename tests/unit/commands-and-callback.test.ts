@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { parseCommand, HELP_MESSAGE } from '../../apps/webhook/dist/commands.js';
+import {
+  parseCommand,
+  HELP_MESSAGE,
+  getAppVersion,
+  formatVersionMessage
+} from '../../apps/webhook/dist/commands.js';
 import {
   validateCallbackPayload,
   generateStableRandomId,
@@ -34,10 +39,24 @@ describe('Webhook - Command Parser', () => {
     });
   });
 
+  it('parses /version command, synonyms, and payload', () => {
+    assert.deepEqual(parseCommand('/version'), { type: 'version' });
+    assert.deepEqual(parseCommand('/версия'), { type: 'version' });
+    assert.deepEqual(parseCommand('версия'), { type: 'version' });
+
+    const payload = JSON.stringify({ command: 'version' });
+    assert.deepEqual(parseCommand('показать версию', payload), { type: 'version' });
+
+    const msg = formatVersionMessage();
+    assert.ok(msg.includes('Версия сервиса Readable Web:'));
+    assert.ok(msg.includes('Среда:'));
+  });
+
   it('parses /help command and synonyms', () => {
     assert.deepEqual(parseCommand('/help'), { type: 'help' });
     assert.deepEqual(parseCommand('?'), { type: 'help' });
     assert.deepEqual(parseCommand('помощь'), { type: 'help' });
+    assert.ok(HELP_MESSAGE.includes('/version'));
   });
 
   it('treats unrecognized text properly', () => {
