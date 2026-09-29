@@ -212,9 +212,34 @@ Because Serverless Containers require the Docker images to already exist in the 
 
 ---
 
-### B. Building & Pushing Docker Images (via Docker)
+### B. Automated Deployment (Recommended)
 
-From the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
+Once the initial registry is created, you can build, push, and deploy revisions with a single command from the project root:
+
+```bash
+# Deploy both Webhook and Worker containers
+npm run deploy
+
+# Or deploy only the Webhook container (fast redeploy for webhook changes)
+npm run deploy:webhook
+
+# Or deploy only the Worker container
+npm run deploy:worker
+```
+
+The script automatically:
+1. Logs into Yandex Container Registry using `infra/yandex/authorized_key.json`.
+2. Resolves the registry ID from Terraform output.
+3. Builds the targeted container(s) for `linux/amd64` with a unique git-based timestamp tag.
+4. Pushes the image(s) to Yandex Container Registry.
+5. Runs `terraform apply` with the updated image tag to deploy the new Serverless Container revision without affecting existing databases or queues.
+6. Prints the public Webhook URL upon completion.
+
+---
+
+### C. Manual Building & Pushing (via Docker & Terraform CLI)
+
+If you prefer to run each step manually:
 
 1. **Log in Docker to Yandex Container Registry** (using `authorized_key.json`):
    ```bash
@@ -228,8 +253,8 @@ From the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
 
 3. **Build the container images:**
    ```bash
-   docker build -t cr.yandex/$REGISTRY_ID/webhook:latest -f infra/containers/Dockerfile.webhook .
-   docker build -t cr.yandex/$REGISTRY_ID/worker:latest -f infra/containers/Dockerfile.worker .
+   docker build --platform linux/amd64 -t cr.yandex/$REGISTRY_ID/webhook:latest -f infra/containers/Dockerfile.webhook .
+   docker build --platform linux/amd64 -t cr.yandex/$REGISTRY_ID/worker:latest -f infra/containers/Dockerfile.worker .
    ```
 
 4. **Push the images:**
@@ -238,16 +263,11 @@ From the **project root directory** (`/Users/artemreva/projects/proxy_pdf`):
    docker push cr.yandex/$REGISTRY_ID/worker:latest
    ```
 
----
-
-### C. Deploy Full Infrastructure
-
-Now that the images are in the registry, deploy the remaining containers, queues, database, and trigger:
-
-```bash
-cd infra/yandex
-terraform apply
-```
+5. **Deploy revision via Terraform:**
+   ```bash
+   cd infra/yandex
+   terraform apply
+   ```
 
 To view your deployed Webhook URL:
 ```bash

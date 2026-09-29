@@ -4,7 +4,8 @@ import { parseCommand, HELP_MESSAGE } from '../../apps/webhook/dist/commands.js'
 import {
   validateCallbackPayload,
   generateStableRandomId,
-  isMessageNewEvent
+  isMessageNewEvent,
+  createStatusKeyboard
 } from '../../packages/vk/dist/index.js';
 
 describe('Webhook - Command Parser', () => {
@@ -24,6 +25,15 @@ describe('Webhook - Command Parser', () => {
     });
   });
 
+  it('parses status command from button click payload', () => {
+    const payload = JSON.stringify({ command: 'status', jobId: 'job_btn_999' });
+    const res = parseCommand('📊 Проверить статус', payload);
+    assert.deepEqual(res, {
+      type: 'status',
+      jobId: 'job_btn_999'
+    });
+  });
+
   it('parses /help command and synonyms', () => {
     assert.deepEqual(parseCommand('/help'), { type: 'help' });
     assert.deepEqual(parseCommand('?'), { type: 'help' });
@@ -36,6 +46,26 @@ describe('Webhook - Command Parser', () => {
       type: 'unrecognized',
       rawText: 'hello world'
     });
+  });
+});
+
+describe('VK - Keyboard Generator', () => {
+  it('generates valid inline status keyboard with job ID payload', () => {
+    const rawJson = createStatusKeyboard('job_xyz_789');
+    const keyboard = JSON.parse(rawJson);
+
+    assert.equal(keyboard.inline, true);
+    assert.equal(Array.isArray(keyboard.buttons), true);
+    assert.equal(keyboard.buttons.length, 1);
+    assert.equal(keyboard.buttons[0].length, 1);
+
+    const button = keyboard.buttons[0][0];
+    assert.equal(button.action.type, 'text');
+    assert.equal(button.action.label, '📊 Проверить статус');
+    assert.equal(button.color, 'primary');
+
+    const payload = JSON.parse(button.action.payload);
+    assert.deepEqual(payload, { command: 'status', jobId: 'job_xyz_789' });
   });
 });
 

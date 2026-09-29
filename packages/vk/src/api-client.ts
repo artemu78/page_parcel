@@ -125,6 +125,7 @@ export class VkApiClient {
     message: string;
     attachment?: string;
     randomId: number;
+    keyboard?: string;
   }): Promise<number> {
     const callParams: Record<string, string | number> = {
       peer_id: params.peerId,
@@ -134,6 +135,10 @@ export class VkApiClient {
 
     if (params.attachment) {
       callParams.attachment = params.attachment;
+    }
+
+    if (params.keyboard) {
+      callParams.keyboard = params.keyboard;
     }
 
     return this.callMethod<number>('messages.send', callParams);

@@ -4,7 +4,8 @@ import {
   isMessageNewEvent,
   VkApiClient,
   generateStableRandomId,
-  VkMessageNewEvent
+  VkMessageNewEvent,
+  createStatusKeyboard
 } from '@readable-web/vk';
 import { validateUrlSyntax } from '@readable-web/safe-network';
 import { JobStore, OutboxService } from '@readable-web/jobs';
@@ -75,7 +76,7 @@ export class WebhookHandler {
     // Ignore messages sent by group itself
     if (fromId < 0) return;
 
-    const command = parseCommand(text);
+    const command = parseCommand(text, msg.payload);
 
     switch (command.type) {
       case 'help': {
@@ -167,11 +168,13 @@ export class WebhookHandler {
       // Job remains in accepted state for background sweeper retry
     }
 
-    // 5. Send asynchronous preparation confirmation to user
+    // 5. Send asynchronous preparation confirmation to user with inline status button and text description
+    const statusKeyboard = createStatusKeyboard(job.id);
     await this.sendReply(
       peerId,
-      `⏳ Готовим удобную версию статьи...\nИдентификатор задания: ${job.id}\n\nВы можете проверить статус: /status ${job.id}`,
-      `prep_${job.id}`
+      `⏳ Готовим удобную версию статьи...\nИдентификатор задания: ${job.id}\n\nВы можете проверить статус с помощью кнопки ниже или командой:\n/status ${job.id}`,
+      `prep_${job.id}`,
+      statusKeyboard
     );
   }
 
@@ -237,7 +240,7 @@ export class WebhookHandler {
     await this.sendReply(peerId, reply, `status_resp_${messageId}`);
   }
 
-  private async sendReply(peerId: number, message: string, seed: string): Promise<void> {
+  private async sendReply(peerId: number, message: string, seed: string, keyboard?: string): Promise<void> {
     if (!this.vkClient) return;
 
     try {
@@ -245,7 +248,8 @@ export class WebhookHandler {
       await this.vkClient.sendMessage({
         peerId,
         message,
-        randomId
+        randomId,
+        keyboard
       });
     } catch (err) {
       this.logger.warn(`Failed to send VK message: ${(err as Error).message}`);

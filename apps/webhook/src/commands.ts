@@ -4,7 +4,23 @@ export type ParsedCommand =
   | { type: 'help' }
   | { type: 'unrecognized'; rawText: string };
 
-export function parseCommand(text: string): ParsedCommand {
+export function parseCommand(text: string, payload?: string): ParsedCommand {
+  if (payload) {
+    try {
+      const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
+      if (data && typeof data === 'object') {
+        if ((data.command === 'status' || data.action === 'status') && typeof data.jobId === 'string') {
+          return { type: 'status', jobId: data.jobId };
+        }
+        if (data.command === 'help' || data.action === 'help') {
+          return { type: 'help' };
+        }
+      }
+    } catch {
+      // Ignore JSON parse errors in payload and proceed to parse text
+    }
+  }
+
   const trimmed = text.trim();
 
   if (/^\/help\b/i.test(trimmed) || trimmed === '?' || trimmed.toLowerCase() === 'помощь') {
@@ -16,7 +32,7 @@ export function parseCommand(text: string): ParsedCommand {
     return { type: 'read', url: readMatch[1] };
   }
 
-  const statusMatch = trimmed.match(/^\/status\s+(\S+)/i);
+  const statusMatch = trimmed.match(/^(?:\/status|(?:📊\s*)?статус)\s+(\S+)/i);
   if (statusMatch) {
     return { type: 'status', jobId: statusMatch[1] };
   }

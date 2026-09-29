@@ -6,7 +6,13 @@ import { JobProcessor } from '../../apps/worker/dist/job-processor.js';
 import { VkApiClient } from '../../packages/vk/dist/index.js';
 
 class MockVkClient extends VkApiClient {
-  public sentMessages: Array<{ peerId: number; message: string; attachment?: string; randomId: number }> = [];
+  public sentMessages: Array<{
+    peerId: number;
+    message: string;
+    attachment?: string;
+    randomId: number;
+    keyboard?: string;
+  }> = [];
   public uploadCalls = 0;
   public saveCalls = 0;
   public failUpload = false;
@@ -49,6 +55,7 @@ class MockVkClient extends VkApiClient {
     message: string;
     attachment?: string;
     randomId: number;
+    keyboard?: string;
   }) {
     if (this.failSend) {
       throw new Error('VK API network timeout');
@@ -114,9 +121,56 @@ describe('Integration - Job Lifecycle and Recovery', () => {
     assert.equal(job.status, 'queued');
     assert.equal(job.submittedUrl, 'https://example.org/valid-article');
 
-    // Verify preparation message sent
+    // Verify preparation message sent with button and text description
     const prepMsg = mockVk.sentMessages.find(m => m.message.includes('Готовим удобную версию'));
     assert.ok(prepMsg !== undefined);
+    assert.ok(prepMsg.message.includes(`/status ${job.id}`));
+    assert.ok(prepMsg.keyboard !== undefined);
+
+    const keyboard = JSON.parse(prepMsg.keyboard!);
+    assert.equal(keyboard.inline, true);
+    assert.equal(keyboard.buttons[0][0].action.label, '📊 Проверить статус');
+    const buttonPayload = JSON.parse(keyboard.buttons[0][0].action.payload);
+    assert.deepEqual(buttonPayload, { command: 'status', jobId: job.id });
+  });
+
+  it('responds to status button click event with job status', async () => {
+    // 1. Create a job for user 200
+    const { job } = await store.createJobIfNotExist({
+      ownerId: 200,
+      peerId: 200,
+      eventId: 'evt_btn_source',
+      submittedUrl: 'https://example.org/button-test'
+    });
+
+    // 2. User clicks status button, generating a message_new with button payload
+    const callbackPayload = {
+      type: 'message_new',
+      group_id: 12345,
+      secret: 'secret_123',
+      event_id: 'evt_btn_click_1',
+      object: {
+        message: {
+          id: 55,
+          date: 1600000010,
+          peer_id: 200,
+          from_id: 200,
+          text: '📊 Проверить статус',
+          payload: JSON.stringify({ command: 'status', jobId: job.id })
+        }
+      }
+    };
+
+    const res = await webhook.handleRequest(callbackPayload);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body, 'ok');
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Verify status reply was sent to user
+    const statusMsg = mockVk.sentMessages.find(m => m.message.includes(`Статус задания ${job.id}`));
+    assert.ok(statusMsg !== undefined);
+    assert.ok(statusMsg.message.includes('Состояние: В очереди на обработку'));
   });
 
   it('handles duplicate callback events idempotently without double-enqueuing', async () => {
