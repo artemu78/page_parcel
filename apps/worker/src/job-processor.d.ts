@@ -1,4 +1,5 @@
 import { JobStore } from '@readable-web/jobs';
+import { PdfFormat, PdfFormattingParams } from '@readable-web/pdf';
 import { VkApiClient } from '@readable-web/vk';
 import { Logger } from '@readable-web/observability';
 export interface JobProcessorOptions {
@@ -7,6 +8,7 @@ export interface JobProcessorOptions {
     workerId?: string;
     logger?: Logger;
     leaseDurationMs?: number;
+    pdfFormatting?: PdfFormattingParams | PdfFormat;
 }
 export declare class JobProcessor {
     private jobStore;
@@ -16,6 +18,7 @@ export declare class JobProcessor {
     private leaseDurationMs;
     private browserManager;
     private pdfGenerator;
+    private defaultPdfFormatting?;
     constructor(options: JobProcessorOptions);
     processJob(jobId: string): Promise<{
         success: boolean;

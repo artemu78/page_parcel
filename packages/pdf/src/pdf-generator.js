@@ -42,12 +42,15 @@ class PdfGenerator {
     browser = null;
     logger;
     maxPdfBytes;
-    constructor(logger, maxPdfBytes = 10 * 1024 * 1024) {
+    defaultFormatting;
+    constructor(logger, maxPdfBytes = 10 * 1024 * 1024, defaultFormatting) {
         this.logger = (logger ?? observability_1.defaultLogger).child({ component: 'PdfGenerator' });
         this.maxPdfBytes = maxPdfBytes;
+        this.defaultFormatting = defaultFormatting;
     }
     async getBrowser() {
         if (!this.browser || !this.browser.isConnected()) {
+            this.logger.info('Launching Chromium browser instance for PDF generator');
             this.browser = await playwright_1.chromium.launch({
                 headless: true,
                 args: [
@@ -77,12 +80,13 @@ class PdfGenerator {
     }
     async generate(options) {
         const browser = await this.getBrowser();
-        const htmlContent = (0, template_js_1.buildReaderHtml)(options.data);
+        const formatting = (0, template_js_1.resolvePdfFormatting)(options.formatting ?? options.data.formatting ?? this.defaultFormatting);
+        const htmlContent = (0, template_js_1.buildReaderHtml)(options.data, formatting);
         // Completely isolated offline context with JavaScript and networking disabled
         const context = await browser.newContext({
             javaScriptEnabled: false,
             offline: true,
-            viewport: { width: 1280, height: 800 }
+            viewport: formatting.viewport
         });
         let page = null;
         try {
@@ -95,23 +99,25 @@ class PdfGenerator {
                 waitUntil: 'load',
                 timeout: 15000
             });
-            const pdfBuffer = await page.pdf({
-                format: 'A4',
+            const pdfOptions = {
                 printBackground: true,
-                margin: {
-                    top: '20mm',
-                    bottom: '20mm',
-                    left: '15mm',
-                    right: '15mm'
-                },
+                margin: formatting.margin,
                 displayHeaderFooter: true,
                 headerTemplate: '<div></div>',
                 footerTemplate: `
-          <div style="font-size: 8pt; font-family: sans-serif; text-align: right; width: 100%; margin-right: 15mm; color: #94a3b8;">
+          <div style="font-size: ${formatting.footerFontSizePt}pt; font-family: sans-serif; text-align: right; width: 100%; margin-right: ${formatting.footerMarginRight}; color: #94a3b8;">
             Readable Web • <span class="pageNumber"></span> / <span class="totalPages"></span>
           </div>
         `
-            });
+            };
+            if (formatting.pageWidth && formatting.pageHeight) {
+                pdfOptions.width = formatting.pageWidth;
+                pdfOptions.height = formatting.pageHeight;
+            }
+            else if (formatting.pageFormat) {
+                pdfOptions.format = formatting.pageFormat;
+            }
+            const pdfBuffer = await page.pdf(pdfOptions);
             const sizeBytes = pdfBuffer.length;
             observability_1.metrics.pdfSizeBytes.observe(sizeBytes);
             if (sizeBytes > (options.maxBytes ?? this.maxPdfBytes)) {

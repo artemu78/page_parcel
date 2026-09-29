@@ -5,12 +5,14 @@ const vk_1 = require("@readable-web/vk");
 const jobs_1 = require("@readable-web/jobs");
 const handler_js_1 = require("./handler.js");
 const server_js_1 = require("./server.js");
+const openrouter_js_1 = require("./openrouter.js");
 async function bootstrap() {
     const logger = observability_1.defaultLogger.child({ service: 'webhook' });
     const groupId = Number.parseInt(process.env.VK_GROUP_ID || '0', 10);
     const secret = process.env.VK_SECRET || '';
     const confirmationCode = process.env.VK_CONFIRMATION_CODE || '';
     const vkToken = process.env.VK_GROUP_TOKEN || '';
+    const openRouterApiKey = process.env.OPENROUTER_API_KEY;
     const ymqQueueUrl = process.env.YMQ_QUEUE_URL || '';
     const ydbEndpoint = process.env.YDB_ENDPOINT;
     const ydbDatabase = process.env.YDB_DATABASE;
@@ -48,10 +50,23 @@ async function bootstrap() {
         logger
     });
     const vkClient = vkToken ? new vk_1.VkApiClient({ token: vkToken }) : undefined;
+    const openRouterClient = openRouterApiKey
+        ? new openrouter_js_1.OpenRouterClient({
+            apiKey: openRouterApiKey,
+            logger
+        })
+        : undefined;
+    if (openRouterClient) {
+        logger.info('OpenRouter client initialized');
+    }
+    else {
+        logger.warn('OPENROUTER_API_KEY not configured; Role 3 chat will not be available');
+    }
     const handler = new handler_js_1.WebhookHandler({
         jobStore,
         outboxService,
         vkClient,
+        openRouterClient,
         validationOptions: {
             expectedGroupId: groupId,
             expectedSecret: secret || undefined,

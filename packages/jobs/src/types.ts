@@ -64,6 +64,8 @@ export interface AppSettings {
   adminId?: number;
   errorListeners: number[];
   maxRequestsPerJob?: number;
+  openRouterModel?: string;
+  pdfFormat?: string;
   raw: Record<string, string>;
 }
 
@@ -126,10 +128,18 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
   // Deduplicate
   errorListeners = Array.from(new Set(errorListeners));
 
+  const modelRaw = getVal('OpenRouterModel') ?? getVal('Model') ?? getVal('openrouter_model');
+  const openRouterModel = modelRaw && modelRaw.trim().length > 0 ? modelRaw.trim() : undefined;
+
+  const formatRaw = getVal('PdfFormat') ?? getVal('pdf_format');
+  const pdfFormat = formatRaw && formatRaw.trim().length > 0 ? formatRaw.trim().toLowerCase() : undefined;
+
   return {
     adminId,
     errorListeners,
     maxRequestsPerJob,
+    openRouterModel,
+    pdfFormat,
     raw
   };
 }

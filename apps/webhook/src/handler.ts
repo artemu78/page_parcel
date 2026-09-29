@@ -11,11 +11,13 @@ import { validateUrlSyntax } from '@readable-web/safe-network';
 import { JobStore, OutboxService } from '@readable-web/jobs';
 import { Logger, defaultLogger, metrics } from '@readable-web/observability';
 import { parseCommand, HELP_MESSAGE, formatVersionMessage } from './commands.js';
+import { OpenRouterClient, splitMessage } from './openrouter.js';
 
 export interface WebhookHandlerOptions {
   jobStore: JobStore;
   outboxService: OutboxService;
   vkClient?: VkApiClient;
+  openRouterClient?: OpenRouterClient;
   validationOptions: CallbackValidationOptions;
   logger?: Logger;
   maxUserRequestsPerMinute?: number;
@@ -25,6 +27,7 @@ export class WebhookHandler {
   private jobStore: JobStore;
   private outboxService: OutboxService;
   private vkClient?: VkApiClient;
+  private openRouterClient?: OpenRouterClient;
   private validationOptions: CallbackValidationOptions;
   private logger: Logger;
   private maxRequestsPerMinute: number;
@@ -33,6 +36,7 @@ export class WebhookHandler {
     this.jobStore = options.jobStore;
     this.outboxService = options.outboxService;
     this.vkClient = options.vkClient;
+    this.openRouterClient = options.openRouterClient;
     this.validationOptions = options.validationOptions;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'WebhookHandler' });
     this.maxRequestsPerMinute = options.maxUserRequestsPerMinute ?? 10;
@@ -100,6 +104,12 @@ export class WebhookHandler {
       }
 
       case 'unrecognized': {
+        const roles = await this.jobStore.getUserRoles?.(fromId).catch(() => []) ?? [];
+        if (roles.includes(3)) {
+          await this.handleRole3ChatMessage(peerId, fromId, msg.id, text.trim(), event.event_id || `msg_${msg.id}`);
+          break;
+        }
+
         await this.sendReply(
           peerId,
           `Неизвестная команда. Отправьте /read <URL> для создания PDF или /help для справки.`,
@@ -107,6 +117,97 @@ export class WebhookHandler {
         );
         break;
       }
+    }
+  }
+
+  private async handleRole3ChatMessage(
+    peerId: number,
+    fromId: number,
+    messageId: number,
+    prompt: string,
+    eventId: string
+  ): Promise<void> {
+    if (!prompt) return;
+
+    // 1. Check blocked user status and update access metrics
+    const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
+    if (userRecord && userRecord.status === 1) {
+      this.logger.warn(`Rejected role 3 request from blocked user ${fromId}`);
+      await this.sendReply(
+        peerId,
+        '⛔ Ваш доступ к сервису заблокирован администратором.',
+        `blocked_${eventId}`
+      );
+      return;
+    }
+
+    await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => {});
+
+    // 2. Atomic sliding window rate limiting
+    const rateCheck = await this.jobStore.checkAndConsumeRateLimit(
+      fromId,
+      this.maxRequestsPerMinute,
+      60000
+    );
+
+    if (!rateCheck.allowed) {
+      this.logger.warn(`Role 3 user ${fromId} exceeded rate limit`);
+      await this.sendReply(
+        peerId,
+        `⏳ Слишком много запросов. Пожалуйста, подождите ${rateCheck.retryAfterSeconds} сек.`,
+        `ratelimit_${eventId}`
+      );
+      return;
+    }
+
+    if (!this.openRouterClient) {
+      this.logger.error('OpenRouter client is not configured');
+      await this.sendReply(
+        peerId,
+        '⚠️ Сервис языковой модели временно недоступен (не настроен ключ API OpenRouter).',
+        `or_unavail_${messageId}`
+      );
+      return;
+    }
+
+    // 3. Resolve dynamic model, base URL, and proxy from Settings table
+    let model: string | undefined;
+    let baseUrl: string | undefined;
+    let proxyUrl: string | undefined;
+    try {
+      const settings = await this.jobStore.getSettings();
+      model = settings.openRouterModel;
+      baseUrl = settings.raw['BaseUrl'] || settings.raw['OpenRouterBaseUrl'] || settings.raw['openrouter_base_url'];
+      proxyUrl = settings.raw['Proxy'] || settings.raw['OpenRouterProxy'] || settings.raw['HttpsProxy'] || settings.raw['openrouter_proxy'];
+    } catch (err) {
+      this.logger.warn(`Failed to read settings, using defaults: ${(err as Error).message}`);
+    }
+
+    this.logger.info(`Sending prompt for role 3 user ${fromId} to OpenRouter (model: ${model ?? 'default'})...`);
+
+    try {
+      const reply = await this.openRouterClient.complete({
+        prompt,
+        model,
+        baseUrl,
+        proxyUrl
+      });
+
+      const chunks = splitMessage(reply);
+      for (let i = 0; i < chunks.length; i++) {
+        await this.sendReply(
+          peerId,
+          chunks[i],
+          `or_reply_${messageId}_${i}`
+        );
+      }
+    } catch (err) {
+      this.logger.error(`OpenRouter completion failed for user ${fromId}: ${(err as Error).message}`);
+      await this.sendReply(
+        peerId,
+        `❌ Ошибка при обращении к языковой модели: ${(err as Error).message}`,
+        `or_err_${messageId}`
+      );
     }
   }
 
@@ -271,6 +372,25 @@ export class WebhookHandler {
         keyboard
       });
     } catch (err) {
+      if (keyboard) {
+        const errMsg = (err as Error)?.message || '';
+        const errCode = (err as any)?.errorCode;
+        if (errCode === 912 || errMsg.includes('912')) {
+          this.logger.warn(`Retrying message without keyboard due to VK error 912`);
+          try {
+            const randomId = generateStableRandomId(seed);
+            await this.vkClient.sendMessage({
+              peerId,
+              message,
+              randomId
+            });
+            return;
+          } catch (retryErr) {
+            this.logger.warn(`Failed to send fallback VK message: ${(retryErr as Error).message}`);
+            return;
+          }
+        }
+      }
       this.logger.warn(`Failed to send VK message: ${(err as Error).message}`);
     }
   }

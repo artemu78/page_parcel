@@ -110,7 +110,17 @@ class VkApiClient {
         if (params.keyboard) {
             callParams.keyboard = params.keyboard;
         }
-        return this.callMethod('messages.send', callParams);
+        try {
+            return await this.callMethod('messages.send', callParams);
+        }
+        catch (err) {
+            if (params.keyboard && err instanceof VkApiError && err.errorCode === 912) {
+                this.logger.warn(`VK bot capabilities disabled in community settings (error 912). Falling back to sending message without keyboard.`);
+                const { keyboard: _, ...fallbackParams } = callParams;
+                return await this.callMethod('messages.send', fallbackParams);
+            }
+            throw err;
+        }
     }
 }
 exports.VkApiClient = VkApiClient;

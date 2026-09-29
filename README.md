@@ -227,6 +227,7 @@ Once Terraform creates the secret `readable-web-vk-secrets`:
    - Key: `vk_secret` → Value: *(your Callback API secret)*
    - Key: `vk_confirmation_code` → Value: *(your Callback API confirmation string)*
    - Key: `vk_group_token` → Value: *(your VK Community Access Token)*
+   - Key: `openrouter_api_key` → Value: *(your OpenRouter API Key for Role 3 text model)*
 4. Click **Save**. Check the secret-version references in Terraform and deploy revisions that use the intended version; saving a secret version alone is not evidence that running containers use it.
 
 ---
@@ -244,6 +245,12 @@ CREATE TABLE Settings (
   PRIMARY KEY (key)
 );
 ```
+
+* **Supported Keys**:
+  * `Model` (or `OpenRouterModel`): Target LLM model identifier on OpenRouter for Role 3 chat (e.g. `google/gemini-2.5-flash`, `openai/gpt-4o-mini`). Default: `google/gemini-2.5-flash`.
+  * `Proxy` (or `OpenRouterProxy`): Optional outbound HTTP/HTTPS proxy URL (e.g. `http://user:pass@proxy-host:port`) used by the webhook to bypass geo-restrictions when connecting to OpenRouter.
+  * `BaseUrl` (or `OpenRouterBaseUrl`): Optional custom API base URL for OpenRouter (e.g. a reverse proxy URL like `https://my-proxy.workers.dev/api/v1`). Default: `https://openrouter.ai/api/v1`.
+  * `MaxRequestsPerJob`: Override default per-job browser navigation and resource request limit.
 
 *(Note: User roles and error notifications previously stored under `AdminID` and `ErrorListeners` have been migrated to the dedicated `Roles` table described below. The service automatically purges these legacy keys from `Settings` on startup).*
 
@@ -287,6 +294,7 @@ CREATE TABLE Roles (
 * **Supported Roles**:
   * **Role `1` (`Admin`)**: Service administrator.
   * **Role `2` (`ErrorListeners`)**: Users who receive real-time error notifications in VK direct messages.
+  * **Role `3` (`AiChat`)**: Users who can chat with the OpenRouter text model by sending plain messages without commands. Responses are generated via OpenRouter and forwarded directly to the user in VK.
 
 *(Note: Target VK users must have initiated at least one conversation with the VK bot / community so that VK API allows sending direct messages).*
 

@@ -1,7 +1,7 @@
 import { JobStore, Job, JobFailureCategory } from '@readable-web/jobs';
 import { ValidatingEgressProxy } from '@readable-web/safe-network';
 import { BrowserManager } from '@readable-web/rendering';
-import { PdfGenerator } from '@readable-web/pdf';
+import { PdfGenerator, PdfFormat, PdfFormattingParams } from '@readable-web/pdf';
 import { VkApiClient, generateStableRandomId } from '@readable-web/vk';
 import { Logger, defaultLogger, metrics } from '@readable-web/observability';
 
@@ -11,6 +11,7 @@ export interface JobProcessorOptions {
   workerId?: string;
   logger?: Logger;
   leaseDurationMs?: number;
+  pdfFormatting?: PdfFormattingParams | PdfFormat;
 }
 
 export class JobProcessor {
@@ -21,6 +22,7 @@ export class JobProcessor {
   private leaseDurationMs: number;
   private browserManager: BrowserManager;
   private pdfGenerator: PdfGenerator;
+  private defaultPdfFormatting?: PdfFormattingParams | PdfFormat;
 
   constructor(options: JobProcessorOptions) {
     this.jobStore = options.jobStore;
@@ -28,8 +30,9 @@ export class JobProcessor {
     this.workerId = options.workerId ?? `worker_${process.pid}_${Math.random().toString(36).slice(2, 7)}`;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'JobProcessor', workerId: this.workerId });
     this.leaseDurationMs = options.leaseDurationMs ?? 90000; // 90 seconds
+    this.defaultPdfFormatting = options.pdfFormatting;
     this.browserManager = new BrowserManager(this.logger);
-    this.pdfGenerator = new PdfGenerator(this.logger);
+    this.pdfGenerator = new PdfGenerator(this.logger, undefined, options.pdfFormatting);
   }
 
   public async processJob(jobId: string): Promise<{ success: boolean; retryable: boolean }> {
@@ -97,8 +100,26 @@ export class JobProcessor {
           title: renderResult.title
         });
 
+        // Determine PDF format (default is mobile, can be overridden by env, settings, or options)
+        let resolvedFormat: PdfFormat = 'mobile';
+        const envFormat = process.env.PDF_FORMAT;
+        if (envFormat && ['mobile', 'desktop', 'a4', 'a5'].includes(envFormat.toLowerCase())) {
+          resolvedFormat = envFormat.toLowerCase() as PdfFormat;
+        }
+
+        try {
+          if (this.jobStore.getSettings) {
+            const settings = await this.jobStore.getSettings();
+            if (settings.pdfFormat && ['mobile', 'desktop', 'a4', 'a5'].includes(settings.pdfFormat.toLowerCase())) {
+              resolvedFormat = settings.pdfFormat.toLowerCase() as PdfFormat;
+            }
+          }
+        } catch {
+          // Best effort setting resolution
+        }
+
         // Generate clean reader PDF
-        this.logger.info(`Generating PDF for job ${job.id}`);
+        this.logger.info(`Generating PDF for job ${job.id} (format: ${resolvedFormat})`);
         const pdfResult = await this.pdfGenerator.generate({
           data: {
             title: renderResult.title,
@@ -108,7 +129,8 @@ export class JobProcessor {
             retrievedAt: new Date(),
             contentHtml: renderResult.article.contentHtml
           },
-          jobId: job.id
+          jobId: job.id,
+          formatting: this.defaultPdfFormatting ?? { format: resolvedFormat }
         });
 
         if (this.vkClient) {

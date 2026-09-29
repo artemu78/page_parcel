@@ -5,10 +5,12 @@ const vk_1 = require("@readable-web/vk");
 const safe_network_1 = require("@readable-web/safe-network");
 const observability_1 = require("@readable-web/observability");
 const commands_js_1 = require("./commands.js");
+const openrouter_js_1 = require("./openrouter.js");
 class WebhookHandler {
     jobStore;
     outboxService;
     vkClient;
+    openRouterClient;
     validationOptions;
     logger;
     maxRequestsPerMinute;
@@ -16,6 +18,7 @@ class WebhookHandler {
         this.jobStore = options.jobStore;
         this.outboxService = options.outboxService;
         this.vkClient = options.vkClient;
+        this.openRouterClient = options.openRouterClient;
         this.validationOptions = options.validationOptions;
         this.logger = (options.logger ?? observability_1.defaultLogger).child({ component: 'WebhookHandler' });
         this.maxRequestsPerMinute = options.maxUserRequestsPerMinute ?? 10;
@@ -68,9 +71,68 @@ class WebhookHandler {
                 break;
             }
             case 'unrecognized': {
+                const roles = await this.jobStore.getUserRoles?.(fromId).catch(() => []) ?? [];
+                if (roles.includes(3)) {
+                    await this.handleRole3ChatMessage(peerId, fromId, msg.id, text.trim(), event.event_id || `msg_${msg.id}`);
+                    break;
+                }
                 await this.sendReply(peerId, `Неизвестная команда. Отправьте /read <URL> для создания PDF или /help для справки.`, `unrec_${msg.id}`);
                 break;
             }
+        }
+    }
+    async handleRole3ChatMessage(peerId, fromId, messageId, prompt, eventId) {
+        if (!prompt)
+            return;
+        // 1. Check blocked user status and update access metrics
+        const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
+        if (userRecord && userRecord.status === 1) {
+            this.logger.warn(`Rejected role 3 request from blocked user ${fromId}`);
+            await this.sendReply(peerId, '⛔ Ваш доступ к сервису заблокирован администратором.', `blocked_${eventId}`);
+            return;
+        }
+        await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => { });
+        // 2. Atomic sliding window rate limiting
+        const rateCheck = await this.jobStore.checkAndConsumeRateLimit(fromId, this.maxRequestsPerMinute, 60000);
+        if (!rateCheck.allowed) {
+            this.logger.warn(`Role 3 user ${fromId} exceeded rate limit`);
+            await this.sendReply(peerId, `⏳ Слишком много запросов. Пожалуйста, подождите ${rateCheck.retryAfterSeconds} сек.`, `ratelimit_${eventId}`);
+            return;
+        }
+        if (!this.openRouterClient) {
+            this.logger.error('OpenRouter client is not configured');
+            await this.sendReply(peerId, '⚠️ Сервис языковой модели временно недоступен (не настроен ключ API OpenRouter).', `or_unavail_${messageId}`);
+            return;
+        }
+        // 3. Resolve dynamic model, base URL, and proxy from Settings table
+        let model;
+        let baseUrl;
+        let proxyUrl;
+        try {
+            const settings = await this.jobStore.getSettings();
+            model = settings.openRouterModel;
+            baseUrl = settings.raw['BaseUrl'] || settings.raw['OpenRouterBaseUrl'] || settings.raw['openrouter_base_url'];
+            proxyUrl = settings.raw['Proxy'] || settings.raw['OpenRouterProxy'] || settings.raw['HttpsProxy'] || settings.raw['openrouter_proxy'];
+        }
+        catch (err) {
+            this.logger.warn(`Failed to read settings, using defaults: ${err.message}`);
+        }
+        this.logger.info(`Sending prompt for role 3 user ${fromId} to OpenRouter (model: ${model ?? 'default'})...`);
+        try {
+            const reply = await this.openRouterClient.complete({
+                prompt,
+                model,
+                baseUrl,
+                proxyUrl
+            });
+            const chunks = (0, openrouter_js_1.splitMessage)(reply);
+            for (let i = 0; i < chunks.length; i++) {
+                await this.sendReply(peerId, chunks[i], `or_reply_${messageId}_${i}`);
+            }
+        }
+        catch (err) {
+            this.logger.error(`OpenRouter completion failed for user ${fromId}: ${err.message}`);
+            await this.sendReply(peerId, `❌ Ошибка при обращении к языковой модели: ${err.message}`, `or_err_${messageId}`);
         }
     }
     async handleReadCommand(peerId, fromId, inputUrl, eventId) {
@@ -181,6 +243,26 @@ class WebhookHandler {
             });
         }
         catch (err) {
+            if (keyboard) {
+                const errMsg = err?.message || '';
+                const errCode = err?.errorCode;
+                if (errCode === 912 || errMsg.includes('912')) {
+                    this.logger.warn(`Retrying message without keyboard due to VK error 912`);
+                    try {
+                        const randomId = (0, vk_1.generateStableRandomId)(seed);
+                        await this.vkClient.sendMessage({
+                            peerId,
+                            message,
+                            randomId
+                        });
+                        return;
+                    }
+                    catch (retryErr) {
+                        this.logger.warn(`Failed to send fallback VK message: ${retryErr.message}`);
+                        return;
+                    }
+                }
+            }
             this.logger.warn(`Failed to send VK message: ${err.message}`);
         }
     }

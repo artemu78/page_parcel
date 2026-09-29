@@ -6,11 +6,14 @@ import {
   getAppVersion,
   formatVersionMessage
 } from '../../apps/webhook/dist/commands.js';
+import * as http from 'node:http';
+import { AddressInfo } from 'node:net';
 import {
   validateCallbackPayload,
   generateStableRandomId,
   isMessageNewEvent,
-  createStatusKeyboard
+  createStatusKeyboard,
+  VkApiClient
 } from '../../packages/vk/dist/index.js';
 
 describe('Webhook - Command Parser', () => {
@@ -183,5 +186,70 @@ describe('VK - Deterministic Random ID', () => {
     assert.notEqual(prepId, successId);
     assert.notEqual(successId, failId);
     assert.notEqual(prepId, failId);
+  });
+});
+
+describe('VK - Api Client Error 912 Fallback', () => {
+  it('automatically falls back to sending without keyboard when VK API returns error 912', async () => {
+    const requests: Array<{ url: string; bodyParams: URLSearchParams }> = [];
+    const server = http.createServer(async (req, res) => {
+      const parsedUrl = new URL(req.url!, `http://${req.headers.host}`);
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+      const rawBody = Buffer.concat(chunks).toString();
+      const bodyParams = new URLSearchParams(rawBody);
+      requests.push({ url: req.url!, bodyParams });
+
+      if (parsedUrl.pathname === '/messages.send') {
+        const keyboard = bodyParams.get('keyboard');
+        if (keyboard) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: {
+                error_code: 912,
+                error_msg: 'This is a chat bot feature, change this status in settings: Chat bot feature'
+              }
+            })
+          );
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ response: 998877 }));
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const client = new VkApiClient({
+        token: 'test_token',
+        baseUrl
+      });
+
+      const messageId = await client.sendMessage({
+        peerId: 12345,
+        message: 'Hello test',
+        randomId: 1001,
+        keyboard: '{"inline":true}'
+      });
+
+      assert.equal(messageId, 998877);
+      assert.equal(requests.length, 2);
+      assert.ok(requests[0].bodyParams.has('keyboard'));
+      assert.ok(!requests[1].bodyParams.has('keyboard'));
+      assert.equal(requests[1].bodyParams.get('message'), 'Hello test');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

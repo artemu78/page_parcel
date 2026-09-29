@@ -200,6 +200,13 @@ resource "yandex_serverless_container" "webhook" {
     environment_variable = "VK_GROUP_TOKEN"
   }
 
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
+    key                  = "openrouter_api_key"
+    environment_variable = "OPENROUTER_API_KEY"
+  }
+
   depends_on = [
     yandex_resourcemanager_folder_iam_member.webhook_lockbox,
     yandex_resourcemanager_folder_iam_member.webhook_cr_puller,
@@ -234,6 +241,7 @@ resource "yandex_serverless_container" "worker" {
       NODE_ENV                 = "production"
       APP_VERSION              = var.app_version
       WORKER_PORT              = "8080"
+      PDF_FORMAT               = "mobile"
       YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
       YDB_METADATA_CREDENTIALS = "1"

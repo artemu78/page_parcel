@@ -14,14 +14,16 @@ class JobProcessor {
     leaseDurationMs;
     browserManager;
     pdfGenerator;
+    defaultPdfFormatting;
     constructor(options) {
         this.jobStore = options.jobStore;
         this.vkClient = options.vkClient;
         this.workerId = options.workerId ?? `worker_${process.pid}_${Math.random().toString(36).slice(2, 7)}`;
         this.logger = (options.logger ?? observability_1.defaultLogger).child({ component: 'JobProcessor', workerId: this.workerId });
         this.leaseDurationMs = options.leaseDurationMs ?? 90000; // 90 seconds
+        this.defaultPdfFormatting = options.pdfFormatting;
         this.browserManager = new rendering_1.BrowserManager(this.logger);
-        this.pdfGenerator = new pdf_1.PdfGenerator(this.logger);
+        this.pdfGenerator = new pdf_1.PdfGenerator(this.logger, undefined, options.pdfFormatting);
     }
     async processJob(jobId) {
         const startTime = Date.now();
@@ -79,8 +81,25 @@ class JobProcessor {
                     finalUrl: renderResult.finalUrl,
                     title: renderResult.title
                 });
+                // Determine PDF format (default is mobile, can be overridden by env, settings, or options)
+                let resolvedFormat = 'mobile';
+                const envFormat = process.env.PDF_FORMAT;
+                if (envFormat && ['mobile', 'desktop', 'a4', 'a5'].includes(envFormat.toLowerCase())) {
+                    resolvedFormat = envFormat.toLowerCase();
+                }
+                try {
+                    if (this.jobStore.getSettings) {
+                        const settings = await this.jobStore.getSettings();
+                        if (settings.pdfFormat && ['mobile', 'desktop', 'a4', 'a5'].includes(settings.pdfFormat.toLowerCase())) {
+                            resolvedFormat = settings.pdfFormat.toLowerCase();
+                        }
+                    }
+                }
+                catch {
+                    // Best effort setting resolution
+                }
                 // Generate clean reader PDF
-                this.logger.info(`Generating PDF for job ${job.id}`);
+                this.logger.info(`Generating PDF for job ${job.id} (format: ${resolvedFormat})`);
                 const pdfResult = await this.pdfGenerator.generate({
                     data: {
                         title: renderResult.title,
@@ -90,7 +109,8 @@ class JobProcessor {
                         retrievedAt: new Date(),
                         contentHtml: renderResult.article.contentHtml
                     },
-                    jobId: job.id
+                    jobId: job.id,
+                    formatting: this.defaultPdfFormatting ?? { format: resolvedFormat }
                 });
                 if (this.vkClient) {
                     await this.jobStore.updateStatus(job.id, 'uploading');

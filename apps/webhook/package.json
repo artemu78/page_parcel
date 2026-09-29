@@ -11,6 +11,7 @@
     "@readable-web/jobs": "*",
     "@readable-web/observability": "*",
     "@readable-web/safe-network": "*",
-    "@readable-web/vk": "*"
+    "@readable-web/vk": "*",
+    "https-proxy-agent": "^9.1.0"
   }
 }

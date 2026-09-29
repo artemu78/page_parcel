@@ -1,12 +1,19 @@
 import * as crypto from 'node:crypto';
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { Logger, defaultLogger, metrics } from '@readable-web/observability';
-import { buildReaderHtml, ReaderTemplateData } from './template.js';
+import {
+  buildReaderHtml,
+  ReaderTemplateData,
+  PdfFormattingParams,
+  PdfFormat,
+  resolvePdfFormatting
+} from './template.js';
 
 export interface GeneratePdfOptions {
   data: ReaderTemplateData;
   jobId: string;
   maxBytes?: number;
+  formatting?: PdfFormattingParams | PdfFormat;
 }
 
 export interface GeneratedPdfResult {
@@ -19,14 +26,21 @@ export class PdfGenerator {
   private browser: Browser | null = null;
   private logger: Logger;
   private maxPdfBytes: number;
+  private defaultFormatting?: PdfFormattingParams | PdfFormat;
 
-  constructor(logger?: Logger, maxPdfBytes = 10 * 1024 * 1024) {
+  constructor(
+    logger?: Logger,
+    maxPdfBytes = 10 * 1024 * 1024,
+    defaultFormatting?: PdfFormattingParams | PdfFormat
+  ) {
     this.logger = (logger ?? defaultLogger).child({ component: 'PdfGenerator' });
     this.maxPdfBytes = maxPdfBytes;
+    this.defaultFormatting = defaultFormatting;
   }
 
   public async getBrowser(): Promise<Browser> {
     if (!this.browser || !this.browser.isConnected()) {
+      this.logger.info('Launching Chromium browser instance for PDF generator');
       this.browser = await chromium.launch({
         headless: true,
         args: [
@@ -59,13 +73,16 @@ export class PdfGenerator {
 
   public async generate(options: GeneratePdfOptions): Promise<GeneratedPdfResult> {
     const browser = await this.getBrowser();
-    const htmlContent = buildReaderHtml(options.data);
+    const formatting = resolvePdfFormatting(
+      options.formatting ?? options.data.formatting ?? this.defaultFormatting
+    );
+    const htmlContent = buildReaderHtml(options.data, formatting);
 
     // Completely isolated offline context with JavaScript and networking disabled
     const context: BrowserContext = await browser.newContext({
       javaScriptEnabled: false,
       offline: true,
-      viewport: { width: 1280, height: 800 }
+      viewport: formatting.viewport
     });
 
     let page: Page | null = null;
@@ -83,23 +100,26 @@ export class PdfGenerator {
         timeout: 15000
       });
 
-      const pdfBuffer = await page.pdf({
-        format: 'A4',
+      const pdfOptions: Parameters<Page['pdf']>[0] = {
         printBackground: true,
-        margin: {
-          top: '20mm',
-          bottom: '20mm',
-          left: '15mm',
-          right: '15mm'
-        },
+        margin: formatting.margin,
         displayHeaderFooter: true,
         headerTemplate: '<div></div>',
         footerTemplate: `
-          <div style="font-size: 8pt; font-family: sans-serif; text-align: right; width: 100%; margin-right: 15mm; color: #94a3b8;">
+          <div style="font-size: ${formatting.footerFontSizePt}pt; font-family: sans-serif; text-align: right; width: 100%; margin-right: ${formatting.footerMarginRight}; color: #94a3b8;">
             Readable Web • <span class="pageNumber"></span> / <span class="totalPages"></span>
           </div>
         `
-      });
+      };
+
+      if (formatting.pageWidth && formatting.pageHeight) {
+        pdfOptions.width = formatting.pageWidth;
+        pdfOptions.height = formatting.pageHeight;
+      } else if (formatting.pageFormat) {
+        pdfOptions.format = formatting.pageFormat as any;
+      }
+
+      const pdfBuffer = await page.pdf(pdfOptions);
 
       const sizeBytes = pdfBuffer.length;
       metrics.pdfSizeBytes.observe(sizeBytes);

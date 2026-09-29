@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = require("node:test");
 const assert = __importStar(require("node:assert/strict"));
 const commands_js_1 = require("../../apps/webhook/dist/commands.js");
+const http = __importStar(require("node:http"));
 const index_js_1 = require("../../packages/vk/dist/index.js");
 (0, node_test_1.describe)('Webhook - Command Parser', () => {
     (0, node_test_1.it)('parses /read command with valid URL', () => {
@@ -184,6 +185,62 @@ const index_js_1 = require("../../packages/vk/dist/index.js");
         assert.notEqual(prepId, successId);
         assert.notEqual(successId, failId);
         assert.notEqual(prepId, failId);
+    });
+});
+(0, node_test_1.describe)('VK - Api Client Error 912 Fallback', () => {
+    (0, node_test_1.it)('automatically falls back to sending without keyboard when VK API returns error 912', async () => {
+        const requests = [];
+        const server = http.createServer(async (req, res) => {
+            const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+            const chunks = [];
+            for await (const chunk of req) {
+                chunks.push(chunk);
+            }
+            const rawBody = Buffer.concat(chunks).toString();
+            const bodyParams = new URLSearchParams(rawBody);
+            requests.push({ url: req.url, bodyParams });
+            if (parsedUrl.pathname === '/messages.send') {
+                const keyboard = bodyParams.get('keyboard');
+                if (keyboard) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: {
+                            error_code: 912,
+                            error_msg: 'This is a chat bot feature, change this status in settings: Chat bot feature'
+                        }
+                    }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ response: 998877 }));
+                return;
+            }
+            res.writeHead(404);
+            res.end();
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+        const address = server.address();
+        const baseUrl = `http://127.0.0.1:${address.port}`;
+        try {
+            const client = new index_js_1.VkApiClient({
+                token: 'test_token',
+                baseUrl
+            });
+            const messageId = await client.sendMessage({
+                peerId: 12345,
+                message: 'Hello test',
+                randomId: 1001,
+                keyboard: '{"inline":true}'
+            });
+            assert.equal(messageId, 998877);
+            assert.equal(requests.length, 2);
+            assert.ok(requests[0].bodyParams.has('keyboard'));
+            assert.ok(!requests[1].bodyParams.has('keyboard'));
+            assert.equal(requests[1].bodyParams.get('message'), 'Hello test');
+        }
+        finally {
+            await new Promise((resolve) => server.close(() => resolve()));
+        }
     });
 });
 //# sourceMappingURL=commands-and-callback.test.js.map
