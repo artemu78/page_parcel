@@ -116,7 +116,7 @@ Without YDB configuration, each service creates its own in-memory job store. Wit
 
 ## 6. Verification
 
-The repository includes [unit tests](tests/unit), [integration tests](tests/integration), and [security tests](tests/security). Tests import built output, so run the build before testing. Browser-based tests require a compatible Chromium installation and runtime dependencies; the [worker Dockerfile](infra/containers/Dockerfile.worker) includes browser setup for its container image.
+The repository includes [unit tests](tests/unit), [integration tests](tests/integration), and [security tests](tests/security). Tests import built output, so run the build before testing. Browser-based tests require a compatible Chromium installation and runtime dependencies; the [worker Dockerfile](infra/containers/Dockerfile.worker) includes browser setup for its container image. Continuous integration runs the build, typechecks, and the full test suite automatically on pull requests via [GitHub Actions](.github/workflows/test.yml).
 
 Test presence is not a passing result. Record the revision, commands, environment, and outcomes when reporting verification. Mocked checks do not establish live VK delivery or cloud deployment success; those require separate evidence. This README does not claim current live deployment or test status.
 
