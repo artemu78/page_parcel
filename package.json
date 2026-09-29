@@ -1,6 +1,6 @@
 {
   "name": "readable-web",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": true,
   "description": "Production-minded VK community bot for converting public web articles to readable PDFs",
   "workspaces": [

@@ -43,6 +43,41 @@ class ContentExtractor {
             '#main-content'
         ];
         const semanticCandidatesFound = candidateSelectors.filter(sel => doc.querySelector(sel) !== null);
+        // Strip modal dialogs and cookie/consent banners so they are never parsed as the article
+        const cookieSelectors = [
+            'dialog',
+            '[role="dialog"]',
+            '[aria-modal="true"]',
+            '.privacy_choices_dialog',
+            '[id*="consent-banner" i]',
+            '[id*="consent-container" i]',
+            '[id*="consent-modal" i]',
+            '[id*="cookie-banner" i]',
+            '[id*="cookie-notice" i]',
+            '[id*="cookie-consent" i]',
+            '[id*="cookie-bar" i]',
+            '[id*="cookie-law" i]',
+            '[class*="consent-banner" i]',
+            '[class*="consent-container" i]',
+            '[class*="consent-modal" i]',
+            '[class*="cookie-banner" i]',
+            '[class*="cookie-notice" i]',
+            '[class*="cookie-consent" i]',
+            '[class*="cookie-bar" i]',
+            '[class*="cookie-popup" i]',
+            '[class*="privacy-choices" i]',
+            '[id*="privacy-choices" i]',
+            '#onetrust-consent-sdk',
+            '#CybotCookiebotDialog'
+        ];
+        for (const sel of cookieSelectors) {
+            try {
+                doc.querySelectorAll(sel).forEach(el => el.remove());
+            }
+            catch {
+                // Ignore any selector syntax exceptions
+            }
+        }
         // 1. Try Readability first
         let article = null;
         let readabilityAttempted = true;

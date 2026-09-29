@@ -152,6 +152,35 @@ export class BrowserManager {
         this.logger.debug('Page load state timed out, proceeding with DOM content');
       });
 
+      // Simulate fast scroll to trigger lazy loading, IntersectionObservers, and scroll-reveal animations
+      try {
+        await page.evaluate(async () => {
+          const docHeight = Math.max(
+            document.body?.scrollHeight || 0,
+            document.documentElement?.scrollHeight || 0
+          );
+          if (docHeight > 0) {
+            const viewportH = window.innerHeight || 800;
+            const step = Math.max(viewportH * 2, 1000);
+            const maxSteps = 15;
+            let pos = 0;
+            let steps = 0;
+            while (pos < docHeight && steps < maxSteps) {
+              pos += step;
+              window.scrollTo(0, pos);
+              window.dispatchEvent(new Event('scroll'));
+              await new Promise((r) => setTimeout(r, 40));
+              steps++;
+            }
+            window.scrollTo(0, 0);
+            window.dispatchEvent(new Event('scroll'));
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        });
+      } catch {
+        this.logger.debug('Fast scroll evaluation skipped or timed out');
+      }
+
       const currentUrl = page.url();
       const rawHtml = await page.content();
 

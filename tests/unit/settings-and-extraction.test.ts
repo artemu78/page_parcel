@@ -127,4 +127,67 @@ describe('ContentExtractor Error with Article Context and Diagnostics', () => {
       }
     );
   });
+
+  it('strips modal dialogs and cookie/consent banners so they are never parsed as article content', () => {
+    const extractor = new ContentExtractor(100);
+    const htmlWithCookieModal = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Understanding Distributed Systems</title></head>
+        <body>
+          <main>
+            <h1>Understanding Distributed Systems</h1>
+            <p>Distributed systems are collections of independent computing entities that communicate with each other over a network. They enable high scalability, fault tolerance, and availability when designed carefully.</p>
+            <p>In this comprehensive guide, we will explore consensus algorithms, replication strategies, partitioning, and the CAP theorem in depth.</p>
+          </main>
+          <footer>
+            <dialog id="consent-container">
+              <div id="consent-banner">
+                <h3>Cookie settings</h3>
+                <p>We use cookies to deliver and improve our services, analyze site usage, and customize your experience. Read our Cookie Policy here.</p>
+                <button>Accept all cookies</button>
+              </div>
+            </dialog>
+            <div class="privacy_choices_dialog">
+              <p>Manage your privacy preferences and cookie consent options here.</p>
+            </div>
+          </footer>
+        </body>
+      </html>
+    `;
+
+    const article = extractor.extract(htmlWithCookieModal, 'https://example.com/systems');
+    assert.equal(article.title, 'Understanding Distributed Systems');
+    assert.ok(article.textContent.includes('Distributed systems are collections of independent'));
+    assert.ok(!article.textContent.includes('Cookie settings'));
+    assert.ok(!article.textContent.includes('Manage your privacy preferences'));
+  });
+
+  it('rejects pages where the only content is a cookie/consent banner', () => {
+    const extractor = new ContentExtractor(100);
+    const htmlWithOnlyCookieBanner = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Some Blank Page</title></head>
+        <body>
+          <dialog id="consent-container">
+            <div id="consent-banner">
+              <h3>Cookie settings</h3>
+              <p>We use cookies to deliver and improve our services, analyze site usage, and customize your experience. Read our Cookie Policy here for details.</p>
+            </div>
+          </dialog>
+        </body>
+      </html>
+    `;
+
+    assert.throws(
+      () => extractor.extract(htmlWithOnlyCookieBanner, 'https://example.com/only-cookie'),
+      (err: any) => {
+        assert.ok(err instanceof ContentExtractionError);
+        assert.ok(err.message.includes('Could not extract meaningful readable content'));
+        return true;
+      }
+    );
+  });
 });
+

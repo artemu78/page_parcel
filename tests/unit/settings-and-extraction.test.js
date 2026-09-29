@@ -108,5 +108,60 @@ const index_js_2 = require("../../packages/rendering/dist/index.js");
             return true;
         });
     });
+    (0, node_test_1.it)('strips modal dialogs and cookie/consent banners so they are never parsed as article content', () => {
+        const extractor = new index_js_2.ContentExtractor(100);
+        const htmlWithCookieModal = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Understanding Distributed Systems</title></head>
+        <body>
+          <main>
+            <h1>Understanding Distributed Systems</h1>
+            <p>Distributed systems are collections of independent computing entities that communicate with each other over a network. They enable high scalability, fault tolerance, and availability when designed carefully.</p>
+            <p>In this comprehensive guide, we will explore consensus algorithms, replication strategies, partitioning, and the CAP theorem in depth.</p>
+          </main>
+          <footer>
+            <dialog id="consent-container">
+              <div id="consent-banner">
+                <h3>Cookie settings</h3>
+                <p>We use cookies to deliver and improve our services, analyze site usage, and customize your experience. Read our Cookie Policy here.</p>
+                <button>Accept all cookies</button>
+              </div>
+            </dialog>
+            <div class="privacy_choices_dialog">
+              <p>Manage your privacy preferences and cookie consent options here.</p>
+            </div>
+          </footer>
+        </body>
+      </html>
+    `;
+        const article = extractor.extract(htmlWithCookieModal, 'https://example.com/systems');
+        strict_1.default.equal(article.title, 'Understanding Distributed Systems');
+        strict_1.default.ok(article.textContent.includes('Distributed systems are collections of independent'));
+        strict_1.default.ok(!article.textContent.includes('Cookie settings'));
+        strict_1.default.ok(!article.textContent.includes('Manage your privacy preferences'));
+    });
+    (0, node_test_1.it)('rejects pages where the only content is a cookie/consent banner', () => {
+        const extractor = new index_js_2.ContentExtractor(100);
+        const htmlWithOnlyCookieBanner = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Some Blank Page</title></head>
+        <body>
+          <dialog id="consent-container">
+            <div id="consent-banner">
+              <h3>Cookie settings</h3>
+              <p>We use cookies to deliver and improve our services, analyze site usage, and customize your experience. Read our Cookie Policy here for details.</p>
+            </div>
+          </dialog>
+        </body>
+      </html>
+    `;
+        strict_1.default.throws(() => extractor.extract(htmlWithOnlyCookieBanner, 'https://example.com/only-cookie'), (err) => {
+            strict_1.default.ok(err instanceof index_js_2.ContentExtractionError);
+            strict_1.default.ok(err.message.includes('Could not extract meaningful readable content'));
+            return true;
+        });
+    });
 });
 //# sourceMappingURL=settings-and-extraction.test.js.map
