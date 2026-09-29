@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Lambda Reverse Proxy for OpenRouter API
+
+Resources:
+  OpenRouterProxyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: openrouter-reverse-proxy
+      CodeUri: src/
+      Handler: index.handler
+      Runtime: nodejs20.x
+      Timeout: 120
+      MemorySize: 256
+      Architectures:
+        - arm64
+      Description: Reverse proxy forwarding requests to openrouter.ai
+      Events:
+        ProxyApi:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+        RootApi:
+          Type: HttpApi
+          Properties:
+            Path: /
+            Method: ANY
+
+Outputs:
+  ProxyApiUrl:
+    Description: Public HTTP API endpoint for OpenRouter Proxy
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
