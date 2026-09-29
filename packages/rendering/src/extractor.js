@@ -1,8 +1,17 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ContentExtractor = void 0;
+exports.ContentExtractor = exports.ContentExtractionError = void 0;
 const readability_1 = require("@mozilla/readability");
 const jsdom_1 = require("jsdom");
+class ContentExtractionError extends Error {
+    article;
+    constructor(message, article) {
+        super(message);
+        this.name = 'ContentExtractionError';
+        this.article = article ?? null;
+    }
+}
+exports.ContentExtractionError = ContentExtractionError;
 class ContentExtractor {
     minTextLength;
     constructor(minTextLength = 100) {
@@ -15,9 +24,10 @@ class ContentExtractor {
         const dom = new jsdom_1.JSDOM(rawHtml, { url: pageUrl });
         const doc = dom.window.document;
         // 1. Try Readability first
+        let article = null;
         try {
             const reader = new readability_1.Readability(doc);
-            const article = reader.parse();
+            article = reader.parse();
             if (article && article.textContent && article.textContent.trim().length >= this.minTextLength) {
                 return {
                     title: article.title || this.extractFallbackTitle(doc, pageUrl),
@@ -37,7 +47,7 @@ class ContentExtractor {
         if (semanticArticle && semanticArticle.textContent.length >= this.minTextLength) {
             return semanticArticle;
         }
-        throw new Error(`CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than ${this.minTextLength} characters)`);
+        throw new ContentExtractionError(`CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than ${this.minTextLength} characters)`, article);
     }
     extractSemanticFallback(doc, pageUrl) {
         // Selectors commonly used in documentation and single-page articles

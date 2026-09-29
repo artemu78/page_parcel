@@ -1,4 +1,4 @@
-import { Job, JobState, JobFailureCategory, CreateJobParams } from './types.js';
+import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -27,12 +27,25 @@ export interface JobStore {
     limit: number,
     windowMs: number
   ): Promise<RateLimitResult>;
+  getSettings(): Promise<AppSettings>;
+  setSetting?(key: string, value: string): Promise<void>;
+  deleteSetting?(key: string): Promise<void>;
+  getUser?(userId: number): Promise<UserRecord | null>;
+  upsertUserAccess?(userId: number, profileLink?: string): Promise<UserRecord>;
+  setUserStatus?(userId: number, status: number): Promise<void>;
+  getUserRoles?(userId: number): Promise<number[]>;
+  getUsersByRole?(role: number): Promise<number[]>;
+  addUserRole?(userId: number, role: number): Promise<void>;
+  removeUserRole?(userId: number, role: number): Promise<void>;
 }
 
 export class MemoryJobStore implements JobStore {
   private jobs = new Map<string, Job>();
   private eventIndex = new Map<string, string>(); // eventId -> jobId
   private userRateLimits = new Map<number, number[]>(); // userId -> timestamps
+  private settings = new Map<string, string>();
+  private users = new Map<number, UserRecord>();
+  private roles: RoleRecord[] = [];
 
   public async createJobIfNotExist(params: CreateJobParams): Promise<{ job: Job; isDuplicate: boolean }> {
     const existingJobId = this.eventIndex.get(params.eventId);
@@ -206,5 +219,80 @@ export class MemoryJobStore implements JobStore {
     validTimestamps.push(now);
     this.userRateLimits.set(userId, validTimestamps);
     return { allowed: true };
+  }
+
+  public async getSettings(): Promise<AppSettings> {
+    return parseSettingsMap(this.settings);
+  }
+
+  public async setSetting(key: string, value: string): Promise<void> {
+    this.settings.set(key, value);
+  }
+
+  public async deleteSetting(key: string): Promise<void> {
+    this.settings.delete(key);
+  }
+
+  public async getUser(userId: number): Promise<UserRecord | null> {
+    const user = this.users.get(userId);
+    return user ? { ...user } : null;
+  }
+
+  public async upsertUserAccess(userId: number, profileLink?: string): Promise<UserRecord> {
+    const now = Date.now();
+    const existing = this.users.get(userId);
+    const link = profileLink || `https://vk.com/id${userId}`;
+
+    if (existing) {
+      existing.lastAccess = now;
+      existing.requestsCount += 1;
+      existing.profileLink = link;
+      return { ...existing };
+    }
+
+    const newUser: UserRecord = {
+      id: userId,
+      createdAt: now,
+      lastAccess: now,
+      requestsCount: 1,
+      status: 0,
+      profileLink: link
+    };
+    this.users.set(userId, newUser);
+    return { ...newUser };
+  }
+
+  public async setUserStatus(userId: number, status: number): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.status = status;
+    } else {
+      this.users.set(userId, {
+        id: userId,
+        createdAt: Date.now(),
+        lastAccess: Date.now(),
+        requestsCount: 0,
+        status,
+        profileLink: `https://vk.com/id${userId}`
+      });
+    }
+  }
+
+  public async getUserRoles(userId: number): Promise<number[]> {
+    return this.roles.filter(r => r.user === userId).map(r => r.role);
+  }
+
+  public async addUserRole(userId: number, role: number): Promise<void> {
+    if (!this.roles.some(r => r.user === userId && r.role === role)) {
+      this.roles.push({ user: userId, role });
+    }
+  }
+
+  public async removeUserRole(userId: number, role: number): Promise<void> {
+    this.roles = this.roles.filter(r => !(r.user === userId && r.role === role));
+  }
+
+  public async getUsersByRole(role: number): Promise<number[]> {
+    return Array.from(new Set(this.roles.filter(r => r.role === role).map(r => r.user)));
   }
 }

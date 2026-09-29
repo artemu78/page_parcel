@@ -126,7 +126,21 @@ export class WebhookHandler {
       return;
     }
 
-    // 2. Rate limiting (atomic)
+    // 2. Check blocked user status and update access metrics
+    const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
+    if (userRecord && userRecord.status === 1) {
+      this.logger.warn(`Rejected request from blocked user ${fromId}`);
+      await this.sendReply(
+        peerId,
+        '⛔ Ваш доступ к сервису заблокирован администратором.',
+        `blocked_${eventId}`
+      );
+      return;
+    }
+
+    await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => {});
+
+    // 3. Rate limiting (atomic)
     const rateCheck = await this.jobStore.checkAndConsumeRateLimit(
       fromId,
       this.maxRequestsPerMinute,

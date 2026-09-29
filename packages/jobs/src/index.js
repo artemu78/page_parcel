@@ -18,4 +18,5 @@ __exportStar(require("./types.js"), exports);
 __exportStar(require("./store.js"), exports);
 __exportStar(require("./queue.js"), exports);
 __exportStar(require("./outbox.js"), exports);
+__exportStar(require("./ydb-store.js"), exports);
 //# sourceMappingURL=index.js.map

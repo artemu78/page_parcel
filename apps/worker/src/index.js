@@ -9,7 +9,19 @@ async function bootstrap() {
     const logger = observability_1.defaultLogger.child({ service: 'worker' });
     const vkToken = process.env.VK_GROUP_TOKEN || '';
     const triggerSecret = process.env.TRIGGER_SECRET;
-    const jobStore = new jobs_1.MemoryJobStore();
+    const ydbEndpoint = process.env.YDB_ENDPOINT;
+    const ydbDatabase = process.env.YDB_DATABASE;
+    let jobStore;
+    if (ydbEndpoint && ydbDatabase) {
+        logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
+        const ydbStore = new jobs_1.YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+        await ydbStore.init();
+        jobStore = ydbStore;
+    }
+    else {
+        logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
+        jobStore = new jobs_1.MemoryJobStore();
+    }
     const vkClient = vkToken ? new vk_1.VkApiClient({ token: vkToken }) : undefined;
     const processor = new job_processor_js_1.JobProcessor({
         jobStore,

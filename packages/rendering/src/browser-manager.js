@@ -17,10 +17,13 @@ class BrowserManager {
             this.logger.info('Launching Chromium browser instance');
             this.browser = await playwright_1.chromium.launch({
                 headless: true,
-                // Chromium sandbox enabled. No --no-sandbox flag.
                 args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
+                    '--no-zygote',
+                    '--single-process',
                     '--disable-extensions',
                     '--disable-component-update',
                     '--disable-background-networking',
@@ -39,13 +42,13 @@ class BrowserManager {
         const browser = await this.getBrowser();
         const timeoutMs = options.timeoutMs ?? 45000;
         const maxRequests = options.maxRequests ?? 100;
-        // Fresh isolated browser context for each job
+        // Fresh isolated browser context for each job with mobile device emulation
+        const mobileProfile = playwright_1.devices['Pixel 7'];
         const context = await browser.newContext({
+            ...mobileProfile,
             proxy: { server: options.egressProxyUrl },
             serviceWorkers: 'block',
             ignoreHTTPSErrors: false,
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 (ReadableWeb/1.0)',
-            viewport: { width: 1280, height: 800 },
             javaScriptEnabled: true
         });
         let page = null;

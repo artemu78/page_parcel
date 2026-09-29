@@ -52,6 +52,14 @@ const index_js_1 = require("../../packages/vk/dist/index.js");
             jobId: 'job_12345_abc'
         });
     });
+    (0, node_test_1.it)('parses status command from button click payload', () => {
+        const payload = JSON.stringify({ command: 'status', jobId: 'job_btn_999' });
+        const res = (0, commands_js_1.parseCommand)('📊 Проверить статус', payload);
+        assert.deepEqual(res, {
+            type: 'status',
+            jobId: 'job_btn_999'
+        });
+    });
     (0, node_test_1.it)('parses /help command and synonyms', () => {
         assert.deepEqual((0, commands_js_1.parseCommand)('/help'), { type: 'help' });
         assert.deepEqual((0, commands_js_1.parseCommand)('?'), { type: 'help' });
@@ -63,6 +71,22 @@ const index_js_1 = require("../../packages/vk/dist/index.js");
             type: 'unrecognized',
             rawText: 'hello world'
         });
+    });
+});
+(0, node_test_1.describe)('VK - Keyboard Generator', () => {
+    (0, node_test_1.it)('generates valid inline status keyboard with job ID payload', () => {
+        const rawJson = (0, index_js_1.createStatusKeyboard)('job_xyz_789');
+        const keyboard = JSON.parse(rawJson);
+        assert.equal(keyboard.inline, true);
+        assert.equal(Array.isArray(keyboard.buttons), true);
+        assert.equal(keyboard.buttons.length, 1);
+        assert.equal(keyboard.buttons[0].length, 1);
+        const button = keyboard.buttons[0][0];
+        assert.equal(button.action.type, 'text');
+        assert.equal(button.action.label, '📊 Проверить статус');
+        assert.equal(button.color, 'primary');
+        const payload = JSON.parse(button.action.payload);
+        assert.deepEqual(payload, { command: 'status', jobId: 'job_xyz_789' });
     });
 });
 (0, node_test_1.describe)('VK - Callback API Validator', () => {

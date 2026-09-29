@@ -10,6 +10,16 @@ export interface ExtractedArticle {
   length: number;
 }
 
+export class ContentExtractionError extends Error {
+  public article: any;
+
+  constructor(message: string, article?: any) {
+    super(message);
+    this.name = 'ContentExtractionError';
+    this.article = article ?? null;
+  }
+}
+
 export class ContentExtractor {
   private minTextLength: number;
 
@@ -26,9 +36,10 @@ export class ContentExtractor {
     const doc = dom.window.document;
 
     // 1. Try Readability first
+    let article: any = null;
     try {
       const reader = new Readability(doc);
-      const article = reader.parse();
+      article = reader.parse();
 
       if (article && article.textContent && article.textContent.trim().length >= this.minTextLength) {
         return {
@@ -50,8 +61,9 @@ export class ContentExtractor {
       return semanticArticle;
     }
 
-    throw new Error(
-      `CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than ${this.minTextLength} characters)`
+    throw new ContentExtractionError(
+      `CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than ${this.minTextLength} characters)`,
+      article
     );
   }
 

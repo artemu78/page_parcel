@@ -23,6 +23,8 @@ export declare class JobProcessor {
     }>;
     private classifyError;
     private sendFailureNotification;
+    private notifyErrorListeners;
+    private formatArticleForLog;
     close(): Promise<void>;
 }
 //# sourceMappingURL=job-processor.d.ts.map

@@ -17,70 +17,20 @@ Production-minded MVP of a VK community bot that converts public web articles an
 
 ---
 
-## 2. Architecture & Isolation Design
+## 2. Documentation & Architecture
 
-```text
-┌─────────────────┐       HTTPS       ┌──────────────────────────────────────────────┐
-│  VK Messenger   ├──────────────────►│             Webhook App                      │
-│  (Callback API) │◄──────────────────┤  (Yandex Serverless Container / Express)     │
-└─────────────────┘      "ok" /       └──────────────────────┬───────────────────────┘
-                      confirmation                           │
-                                                             │ 1. Deduplicate & Save State
-                                                             │ 2. Enqueue Job
-                                                             ▼
-                                      ┌──────────────────────────────────────────────┐
-                                      │ YDB (Managed Database)                       │
-                                      │ - jobs table (TTL 24h, state, version, lease)│
-                                      │ - rate_limits table (per-user atomic limits) │
-                                      └──────────────────────┬───────────────────────┘
-                                                             │
-                                                             ▼
-                                      ┌──────────────────────────────────────────────┐
-                                      │ Yandex Message Queue (YMQ)                   │
-                                      │ SQS-compatible Queue + Dead Letter Queue     │
-                                      └──────────────────────┬───────────────────────┘
-                                                             │
-                                                             │ YMQ Trigger (batch size 1)
-                                                             ▼
-                                      ┌──────────────────────────────────────────────┐
-                                      │             Worker App                       │
-                                      │ - Claim lease in YDB (atomic)                │
-                                      │ - Update status: rendering                   │
-                                      └──────────────┬───────────────────────────────┘
-                                                     │
-                             ┌───────────────────────┴───────────────────────┐
-                             │                                               │
-                             ▼                                               ▼
-┌──────────────────────────────────────────────┐  ┌──────────────────────────────────────────┐
-│ Safe Network: Validating Egress Proxy        │  │ Browser Engine: Playwright (Chromium)    │
-│ - Socket-level SSRF filter & IP blocklist    │◄─┤ - Fresh context per job                  │
-│ - DNS resolution & rebinding defense         │  │ - Service workers / media / fonts blocked│
-│ - Streaming response byte limiter (5 MiB/20M)│  │ - HTML Readability extraction            │
-└──────────────────────┬───────────────────────┘  └──────────────────┬───────────────────────┘
-                       │                                             │
-                       ▼                                             ▼
-┌──────────────────────────────────────────────┐  ┌──────────────────────────────────────────┐
-│ Public Web Target Article                    │  │ PDF Generator (Sanitized Offline HTML)   │
-└──────────────────────────────────────────────┘  └──────────────────┬───────────────────────┘
-                                                                     │
-                                                                     │ Ephemeral buffer
-                                                                     ▼
-                                                  ┌──────────────────────────────────────────┐
-                                                  │ VK API Client                            │
-                                                  │ 1. docs.getMessagesUploadServer          │
-                                                  │ 2. POST multipart/form-data              │
-                                                  │ 3. docs.save                             │
-                                                  │ 4. Checkpoint attachment in YDB          │
-                                                  │ 5. messages.send (doc attachment)        │
-                                                  └──────────────────────────────────────────┘
-```
+- [Agent guide](AGENTS.md): repository workflow, reading map, and verification rules.
+- [Architecture](docs/architecture.md): component responsibilities, job lifecycle, and proposed deployment design.
+- [Threat model](docs/threat-model.md): trust boundaries, threats, and intended safeguards.
+- [Operations](docs/operations.md): configuration and operational procedures.
 
-### Chromium Sandboxing & Network Isolation Feasibility Analysis
-* **Serverless Container Constraint:** Yandex Serverless Containers enforce a hardened container sandbox that disallows `CLONE_NEWUSER` / user namespaces, which would force Chromium to run with `--no-sandbox`. Running `--no-sandbox` on untrusted public web pages creates severe remote code execution risks. Furthermore, serverless containers do not support host packet filtering (iptables).
-* **Hardened Deployment Architecture:**
-  * **Webhook:** Runs on **Yandex Serverless Containers** (lightweight Node.js, Callback API validation, rate limiting, and YMQ publishing).
-  * **Worker & Renderer:** Runs in a hardened compute environment (**Yandex Managed Service for Kubernetes** or dedicated **Compute Cloud VM**) where unprivileged user namespaces are enabled (`kernel.unprivileged_userns_clone = 1`), allowing Chromium to run with its full sandbox enabled as unprivileged user `pwuser` (UID 10001).
-  * **Network Enforcement:** Outbound traffic from the browser context is forced through the internal validating egress proxy (`packages/safe-network`), which enforces destination IP classification at connection time.
+The application flow is VK callback → webhook → job store/outbox → queue → worker → article extraction → PDF generation → VK upload and delivery.
+
+### Current implementation and design gaps
+
+- [Terraform](infra/yandex/main.tf) currently defines **both webhook and worker as Yandex Serverless Containers**. The VM/Kubernetes worker described in the architecture document is a proposed design, not the infrastructure implemented here.
+- Both [article rendering](packages/rendering/src/browser-manager.ts) and [PDF generation](packages/pdf/src/pdf-generator.ts) currently launch Chromium with `--no-sandbox` and `--disable-setuid-sandbox`. The documentation's sandbox requirement is not implemented by these launch settings.
+- The architecture and threat-model documents describe intended safeguards; they are not evidence that every safeguard is implemented or verified. Check the corresponding code and tests before relying on a guarantee.
 
 ---
 
@@ -93,7 +43,7 @@ apps/
 packages/
   jobs/               # State machine, MemoryJobStore / YdbJobStore, SQS queue client, outbox recovery
   safe-network/       # URL validation, IPv4/IPv6 classification, DNS resolver, validating forward egress proxy
-  rendering/          # Sandboxed Playwright Chromium manager, route blocking, Mozilla Readability + fallback
+  rendering/          # Playwright Chromium manager, route blocking, Mozilla Readability + fallback
   pdf/                # HTML sanitizer (sanitize-html), reader template, offline PDF generator
   vk/                 # Official VK API client (docs upload & messages.send), token redaction, stable random_id
   observability/      # JSON logger with credential scrubbing, Prometheus metrics registry
@@ -105,7 +55,7 @@ tests/
   integration/        # Mocked VK and SQS lifecycle, outbox publication, retry checkpoints, cross-user status
   security/           # Real Chromium tests: SSRF blocking, DNS rebinding, oversized streams, offline PDF
 docs/
-  architecture.md     # In-depth architectural design and platform feasibility analysis
+  architecture.md     # Component design, job lifecycle, and proposed deployment architecture
   threat-model.md     # Concise threat model (trust boundaries, SSRF, DoS, credentials, privacy)
   operations.md       # Operational runbook (retries, DLQ redrive, secret rotation, limits, cleanup)
 ```
@@ -116,7 +66,7 @@ docs/
 
 ### Prerequisites
 * Node.js >= 22.0.0 (LTS)
-* npm >= 10.9.0
+* npm with workspace support (the repository does not declare a minimum npm version)
 
 ### Installation & Build
 ```bash
@@ -149,40 +99,25 @@ npm run test:security
 
 ## 5. Local Development Mode
 
-To run locally with simulated VK and queue:
+Build before starting the applications. Review [.env.example](.env.example) for configuration names and provide actual values through the process environment; the application entrypoints do not load this file automatically.
+
+Start the services in separate terminals, with distinct ports:
+
 ```bash
-cp .env.example .env
-# Edit .env with your local ports or development credentials
-
-# Start webhook server (default port 8080)
-node apps/webhook/dist/index.js
-
-# In another terminal, start worker server (default port 8081)
-node apps/worker/dist/index.js
+PORT=8080 node apps/webhook/dist/index.js
 ```
 
----
+```bash
+PORT=8081 node apps/worker/dist/index.js
+```
 
-## 6. Verification Status Report
+Without YDB configuration, each service creates its own in-memory job store. Without a queue URL, the webhook uses an in-memory queue. These separate processes do **not** form a connected local mock pipeline. Without a VK token, no real VK client is created. Use the test harnesses for mocked lifecycle checks; a connected deployment requires shared persistence and queue delivery to the worker.
 
-| Capability / Requirement | Verification Status | Evidence / Notes |
-| :--- | :--- | :--- |
-| **Command parsing (`/read`, `/status`, `/help`)** | **Verified (Unit)** | 100% covered in `tests/unit/commands-and-callback.test.ts` |
-| **VK Callback API validation & confirmation** | **Verified (Unit)** | Secret, group ID, confirmation token, and 'ok' responses tested |
-| **URL syntax & credential rejection** | **Verified (Unit)** | Prohibited schemes, ports, and embedded credentials tested |
-| **IP classification (IPv4, IPv6, mapped, metadata)** | **Verified (Unit)** | Link-local (`169.254.169.254`), loopback, private ranges tested |
-| **Atomic leases, fencing, and deduplication** | **Verified (Unit & Int)** | MemoryJobStore atomic claims, lease expiry, optimistic locks tested |
-| **Per-user atomic rate limiting** | **Verified (Unit)** | Sliding window limits tested |
-| **HTML Sanitization & Cyrillic reader PDF** | **Verified (Unit & Sec)** | Dangerous tags stripped, Cyrillic fonts preserved in PDF output |
-| **Checkpointing & delivery retry** | **Verified (Int)** | Reuses existing VK document attachment on retry without re-upload |
-| **Cross-user status protection** | **Verified (Int)** | Only job owner can inspect status; access denied to other users |
-| **SSRF socket-level blocking (127.0.0.1, 169.254.169.254)** | **Verified (Security)** | Real Chromium + real test server: proved internal server was never reached |
-| **DNS rebinding protection** | **Verified (Security)** | Connection-time DNS re-evaluation blocks rebinding to private IPs |
-| **Streaming response limit (> 5 MiB cutoff)** | **Verified (Security)** | Egress proxy stream meter aborts connections exceeding limit |
-| **Offline PDF generator network isolation** | **Verified (Security)** | Proved PDF print context cannot make external network calls |
-| **End-to-End Smoke Test** | **Verified (Local Mock)** | Full pipeline from command to queue to PDF generation to delivery |
-| **Live Yandex Cloud Deployment** | **Unverified (Requires Cloud)** | Reproducible Terraform and Dockerfiles provided in `infra/` |
-| **Live VK Messenger Delivery** | **Unverified (Requires Token)** | Complete official API client implemented; awaiting real VK group token |
+## 6. Verification
+
+The repository includes [unit tests](tests/unit), [integration tests](tests/integration), and [security tests](tests/security). Tests import built output, so run the build before testing. Browser-based tests require a compatible Chromium installation and runtime dependencies; the [worker Dockerfile](infra/containers/Dockerfile.worker) includes browser setup for its container image.
+
+Test presence is not a passing result. Record the revision, commands, environment, and outcomes when reporting verification. Mocked checks do not establish live VK delivery or cloud deployment success; those require separate evidence. This README does not claim current live deployment or test status.
 
 ---
 
@@ -192,7 +127,7 @@ Manage your cloud resources and containers using only standard **Terraform CLI**
 
 ### A. Infrastructure Management (via Terraform)
 
-All Terraform commands are run from the [`infra/yandex/`](file:///Users/artemreva/projects/proxy_pdf/infra/yandex/) directory.
+All Terraform commands are run from the [`infra/yandex/`](infra/yandex/) directory.
 
 ### A. Initial Setup: Create Container Registry First
 
@@ -212,7 +147,7 @@ Because Serverless Containers require the Docker images to already exist in the 
 
 ---
 
-### B. Automated Deployment (Recommended)
+### B. Automated Deployment
 
 Once the initial registry is created, you can build, push, and deploy revisions with a single command from the project root:
 
@@ -228,11 +163,11 @@ npm run deploy:worker
 ```
 
 The script automatically:
-1. Logs into Yandex Container Registry using `infra/yandex/authorized_key.json`.
+1. Attempts registry login with `infra/yandex/authorized_key.json` when present; otherwise relies on existing Docker credentials.
 2. Resolves the registry ID from Terraform output.
 3. Builds the targeted container(s) for `linux/amd64` with a unique git-based timestamp tag.
 4. Pushes the image(s) to Yandex Container Registry.
-5. Runs `terraform apply` with the updated image tag to deploy the new Serverless Container revision without affecting existing databases or queues.
+5. Runs `terraform apply -auto-approve` with the selected image tag overrides. This applies the full configuration, so it can also change other resources; review the Terraform plan and image-tag variables before using the script.
 6. Prints the public Webhook URL upon completion.
 
 ---
@@ -282,7 +217,7 @@ terraform destroy
 
 ---
 
-### C. Managing Secrets in Yandex Lockbox (via Web Console)
+### D. Managing Secrets in Yandex Lockbox (via Web Console)
 
 Once Terraform creates the secret `readable-web-vk-secrets`:
 1. Open [console.yandex.cloud](https://console.yandex.cloud) in your browser.
@@ -291,13 +226,106 @@ Once Terraform creates the secret `readable-web-vk-secrets`:
    - Key: `vk_secret` → Value: *(your Callback API secret)*
    - Key: `vk_confirmation_code` → Value: *(your Callback API confirmation string)*
    - Key: `vk_group_token` → Value: *(your VK Community Access Token)*
-4. Click **Save**. The Serverless Containers will automatically load these secrets into environment variables at runtime.
+4. Click **Save**. Check the secret-version references in Terraform and deploy revisions that use the intended version; saving a secret version alone is not evidence that running containers use it.
 
 ---
 
-### D. Monitoring & Troubleshooting (via Web Console)
+### E. Runtime Settings (`Settings` table in YDB)
+
+Dynamic operational key-value settings can be changed in runtime without container redeployment via the `Settings` table in YDB (`readable-web-ydb`):
+
+#### 1. Table Schema
+The table is created automatically on worker startup, or can be created manually via YQL in the YDB web console:
+```sql
+CREATE TABLE Settings (
+  key Utf8,
+  value Utf8,
+  PRIMARY KEY (key)
+);
+```
+
+*(Note: User roles and error notifications previously stored under `AdminID` and `ErrorListeners` have been migrated to the dedicated `Roles` table described below. The service automatically purges these legacy keys from `Settings` on startup).*
+
+---
+
+### F. User & Role Management (`Users` & `Roles` tables in YDB)
+
+User access tracking, access control (blocking), and role assignments are managed in YDB:
+
+#### 1. `Users` Table Schema
+Auto-created on service startup or can be created manually in YDB Query editor:
+```sql
+CREATE TABLE Users (
+  ID Int64,
+  CreatedAt Timestamp,
+  LastAccess Timestamp,
+  RequestsCount Int64,
+  Status Int32, -- 0 - enabled, 1 - blocked
+  ProfileLink Utf8,
+  PRIMARY KEY (ID)
+);
+```
+
+* **Columns**:
+  * `ID` *(numeric, PK)*: VKontakte user ID (`from_id`).
+  * `CreatedAt` *(timestamp)*: Date and time when the user first interacted with the bot.
+  * `LastAccess` *(timestamp)*: Date and time of the user's latest request.
+  * `RequestsCount` *(number)*: Total lifetime requests submitted by the user.
+  * `Status` *(number)*: `0` = enabled (normal access), `1` = blocked (bot rejects incoming commands with a block notice).
+  * `ProfileLink` *(string)*: Direct link to the VK profile (`https://vk.com/id...`).
+
+#### 2. `Roles` Table Schema
+```sql
+CREATE TABLE Roles (
+  User Int64, -- Foreign key referencing Users(ID)
+  Role Int32, -- Numeric role identifier
+  PRIMARY KEY (User, Role)
+);
+```
+
+* **Supported Roles**:
+  * **Role `1` (`Admin`)**: Service administrator.
+  * **Role `2` (`ErrorListeners`)**: Users who receive real-time error notifications in VK direct messages.
+
+*(Note: Target VK users must have initiated at least one conversation with the VK bot / community so that VK API allows sending direct messages).*
+
+#### 3. Error Notification Delivery
+* When an error occurs during job processing, the error details (error text, job ID, requested URL, requester profile link `https://vk.com/id...`) are automatically sent to all users with **Role `2` (`ErrorListeners`)** in the `Roles` table.
+* For content extraction errors (`"Could not extract meaningful readable content"`), the alert additionally includes the stringified value of the Readability `article` variable (title, excerpt, text snippet, length) for instant diagnostic inspection without redeploying.
+
+#### 4. Common Management Queries
+```sql
+-- Assign user as ErrorListener (Role 2)
+UPSERT INTO Roles (User, Role) VALUES (123456789, 2);
+
+-- Assign user as Admin (Role 1)
+UPSERT INTO Roles (User, Role) VALUES (123456789, 1);
+
+-- List all users who receive error logs
+SELECT User FROM Roles WHERE Role = 2;
+
+-- Remove ErrorListener role from a user
+DELETE FROM Roles WHERE User = 123456789 AND Role = 2;
+
+-- View most active users
+SELECT ID, RequestsCount, LastAccess, Status, ProfileLink
+FROM Users
+ORDER BY RequestsCount DESC;
+
+-- Block a user (status 1)
+UPDATE Users SET Status = 1 WHERE ID = 123456789;
+
+-- Unblock a user (status 0)
+UPDATE Users SET Status = 0 WHERE ID = 123456789;
+```
+
+---
+
+### G. Monitoring & Troubleshooting (via Web Console)
 
 * **View Logs in Real Time:** Open [console.yandex.cloud](https://console.yandex.cloud) ➔ **Serverless Containers** ➔ Select `readable-web-webhook` or `readable-web-worker` ➔ Click **Logs** (Логи).
 * **Inspect Queues & Dead Letters:** Go to **Cloud Message Queue** ➔ Check message count in `readable-web-jobs` and `readable-web-dlq`.
 * **Inspect Job Metadata & States:** Go to **Managed Service for YDB** ➔ `readable-web-ydb` ➔ **Navigation** ➔ View entries in the `jobs` table.
+* **Inspect Users & Roles:** In **Managed Service for YDB** ➔ `readable-web-ydb` ➔ View entries in `Users` and `Roles` tables.
+* **Inspect Runtime Settings:** In **Managed Service for YDB** ➔ `readable-web-ydb` ➔ View entries in the `Settings` table.
 

@@ -115,6 +115,11 @@ class JobProcessor {
         catch (err) {
             const errorMsg = err.message || String(err);
             this.logger.error(`Error processing job ${job.id}: ${errorMsg}`);
+            const article = err?.article;
+            // Send error details to configured ErrorListeners
+            await this.notifyErrorListeners(job, errorMsg, article).catch((listenerErr) => {
+                this.logger.warn(`Failed to notify error listeners for job ${job.id}: ${listenerErr.message}`);
+            });
             const { category, isTerminal, userMessage } = this.classifyError(errorMsg, job);
             if (isTerminal || job.attempts >= job.maxAttempts) {
                 const finalCategory = isTerminal ? category : 'RETRIES_EXHAUSTED';
@@ -194,6 +199,66 @@ class JobProcessor {
         }
         catch (err) {
             this.logger.warn(`Failed to send failure notification for job ${job.id}: ${err.message}`);
+        }
+    }
+    async notifyErrorListeners(job, errorMsg, article) {
+        if (!this.vkClient)
+            return;
+        let errorListeners = [];
+        try {
+            if (this.jobStore.getUsersByRole) {
+                errorListeners = await this.jobStore.getUsersByRole(2);
+            }
+        }
+        catch (err) {
+            this.logger.warn(`Failed to fetch error listeners (role 2) from job store: ${err.message}`);
+            return;
+        }
+        if (!errorListeners || errorListeners.length === 0) {
+            return;
+        }
+        const isExtractionError = errorMsg.includes('Could not extract meaningful readable content') ||
+            article !== undefined;
+        let message = `🚨 Ошибка обработки задания ${job.id}:
+• Ошибка: ${errorMsg}
+• URL: ${job.submittedUrl}
+• Пользователь: https://vk.com/id${job.ownerId} (id${job.ownerId})`;
+        if (isExtractionError) {
+            const formattedArticle = this.formatArticleForLog(article);
+            message += `\n\n📄 Значение переменной "article":\n${formattedArticle}`;
+        }
+        if (message.length > 4000) {
+            message = message.slice(0, 3950) + '\n... [текст лога обрезан из-за лимита VK]';
+        }
+        for (const listenerId of errorListeners) {
+            try {
+                const randomId = (0, vk_1.generateStableRandomId)(`errlog_${job.id}_${job.attempts}_${listenerId}`);
+                await this.vkClient.sendMessage({
+                    peerId: listenerId,
+                    message,
+                    randomId
+                });
+                this.logger.info(`Sent error log for job ${job.id} to error listener ${listenerId}`);
+            }
+            catch (sendErr) {
+                this.logger.warn(`Failed to send error log for job ${job.id} to listener ${listenerId}: ${sendErr.message}`);
+            }
+        }
+    }
+    formatArticleForLog(article) {
+        if (article === undefined)
+            return 'undefined';
+        if (article === null)
+            return 'null';
+        try {
+            const str = JSON.stringify(article, null, 2);
+            if (str.length > 2500) {
+                return str.slice(0, 2500) + `\n... [обрезано, полная длина: ${str.length}]`;
+            }
+            return str;
+        }
+        catch {
+            return String(article);
         }
     }
     async close() {

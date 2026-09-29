@@ -18,4 +18,5 @@ __exportStar(require("./types.js"), exports);
 __exportStar(require("./callback-validator.js"), exports);
 __exportStar(require("./api-client.js"), exports);
 __exportStar(require("./random-id.js"), exports);
+__exportStar(require("./keyboard.js"), exports);
 //# sourceMappingURL=index.js.map

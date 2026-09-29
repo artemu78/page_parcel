@@ -39,4 +39,22 @@ export interface JobQueueMessage {
     createdAt: number;
     attempts: number;
 }
+export interface AppSettings {
+    adminId?: number;
+    errorListeners: number[];
+    raw: Record<string, string>;
+}
+export declare function parseSettingsMap(map: Map<string, string> | Record<string, string>): AppSettings;
+export interface UserRecord {
+    id: number;
+    createdAt: number | Date;
+    lastAccess: number | Date;
+    requestsCount: number;
+    status: number;
+    profileLink: string;
+}
+export interface RoleRecord {
+    user: number;
+    role: number;
+}
 //# sourceMappingURL=types.d.ts.map

@@ -1,5 +1,5 @@
 import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX } from 'ydb-sdk';
-import { Job, JobState, JobFailureCategory, CreateJobParams } from './types.js';
+import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
 import { JobStore, RateLimitResult } from './store.js';
 
 export interface YdbJobStoreOptions {
@@ -11,6 +11,10 @@ export interface YdbJobStoreOptions {
 export class YdbJobStore implements JobStore {
   private driver: Driver;
   private isOwnedDriver: boolean;
+  private settingsCache?: { data: AppSettings; expiresAt: number };
+  private settingsCacheTtlMs = 15000; // 15 seconds
+  private roleUsersCache = new Map<number, { users: number[]; expiresAt: number }>();
+  private roleUsersCacheTtlMs = 15000; // 15 seconds
 
   constructor(options: YdbJobStoreOptions) {
     if (options.driver) {
@@ -33,6 +37,44 @@ export class YdbJobStore implements JobStore {
   public async init(): Promise<void> {
     // Non-blocking warmup
     this.driver.ready(5000).catch(() => {});
+
+    // Best-effort auto-creation of Settings, Users, and Roles tables
+    this.driver.tableClient.withSession(async (session) => {
+      await session.executeQuery(`
+        CREATE TABLE IF NOT EXISTS \`Settings\` (
+          key Utf8,
+          value Utf8,
+          PRIMARY KEY (key)
+        );
+      `);
+
+      await session.executeQuery(`
+        CREATE TABLE IF NOT EXISTS \`Users\` (
+          ID Int64,
+          CreatedAt Timestamp,
+          LastAccess Timestamp,
+          RequestsCount Int64,
+          Status Int32,
+          ProfileLink Utf8,
+          PRIMARY KEY (ID)
+        );
+      `);
+
+      await session.executeQuery(`
+        CREATE TABLE IF NOT EXISTS \`Roles\` (
+          User Int64,
+          Role Int32,
+          PRIMARY KEY (User, Role)
+        );
+      `);
+
+      // Delete deprecated ErrorListeners and Admin records from Settings table
+      await session.executeQuery(`
+        DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
+      `);
+    }).catch(() => {
+      // In case table creation is restricted or already exists
+    });
   }
 
   public async destroy(): Promise<void> {
@@ -462,5 +504,246 @@ export class YdbJobStore implements JobStore {
 
       return { allowed: true };
     });
+  }
+
+  public async getSettings(): Promise<AppSettings> {
+    const now = Date.now();
+    if (this.settingsCache && this.settingsCache.expiresAt > now) {
+      return this.settingsCache.data;
+    }
+
+    try {
+      const settings = await this.driver.tableClient.withSession(async (session) => {
+        const query = `SELECT * FROM \`Settings\`;`;
+        const res = await session.executeQuery(query, {}, AUTO_TX);
+        const rows = TypedData.createNativeObjects(res.resultSets[0]) as unknown as Array<Record<string, any>>;
+
+        const map: Record<string, string> = {};
+        for (const row of rows) {
+          if (row.key !== undefined && row.value !== undefined) {
+            map[String(row.key)] = String(row.value);
+          } else if (row.Key !== undefined && row.Value !== undefined) {
+            map[String(row.Key)] = String(row.Value);
+          } else {
+            for (const [colKey, colVal] of Object.entries(row)) {
+              if (colVal !== null && colVal !== undefined) {
+                map[colKey] = String(colVal);
+              }
+            }
+          }
+        }
+
+        return parseSettingsMap(map);
+      });
+
+      this.settingsCache = {
+        data: settings,
+        expiresAt: now + this.settingsCacheTtlMs
+      };
+      return settings;
+    } catch {
+      return parseSettingsMap({});
+    }
+  }
+
+  public async setSetting(key: string, value: string): Promise<void> {
+    await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $key AS Utf8;
+        DECLARE $value AS Utf8;
+        UPSERT INTO \`Settings\` (key, value) VALUES ($key, $value);
+      `;
+      await session.executeQuery(query, {
+        '$key': TypedValues.utf8(key),
+        '$value': TypedValues.utf8(value)
+      }, AUTO_TX);
+    });
+
+    this.settingsCache = undefined;
+  }
+
+  public async deleteSetting(key: string): Promise<void> {
+    await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $key AS Utf8;
+        DELETE FROM \`Settings\` WHERE key = $key;
+      `;
+      await session.executeQuery(query, {
+        '$key': TypedValues.utf8(key)
+      }, AUTO_TX);
+    });
+
+    this.settingsCache = undefined;
+  }
+
+  public async getUser(userId: number): Promise<UserRecord | null> {
+    return await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $id AS Int64;
+        SELECT ID, CreatedAt, LastAccess, RequestsCount, Status, ProfileLink
+        FROM \`Users\`
+        WHERE ID = $id;
+      `;
+      const res = await session.executeQuery(query, {
+        '$id': TypedValues.int64(userId)
+      }, AUTO_TX);
+
+      const rows = TypedData.createNativeObjects(res.resultSets[0]) as unknown as Array<Record<string, any>>;
+      if (!rows || rows.length === 0) return null;
+
+      const row = rows[0];
+      return {
+        id: Number(row.ID),
+        createdAt: row.CreatedAt,
+        lastAccess: row.LastAccess,
+        requestsCount: Number(row.RequestsCount || 0),
+        status: Number(row.Status ?? 0),
+        profileLink: String(row.ProfileLink || `https://vk.com/id${userId}`)
+      };
+    });
+  }
+
+  public async upsertUserAccess(userId: number, profileLink?: string): Promise<UserRecord> {
+    const link = profileLink || `https://vk.com/id${userId}`;
+    return await this.driver.tableClient.withSession(async (session) => {
+      const selectQuery = `
+        DECLARE $id AS Int64;
+        SELECT ID, CreatedAt, LastAccess, RequestsCount, Status, ProfileLink
+        FROM \`Users\`
+        WHERE ID = $id;
+      `;
+      const selRes = await session.executeQuery(selectQuery, {
+        '$id': TypedValues.int64(userId)
+      }, AUTO_TX);
+
+      const rows = TypedData.createNativeObjects(selRes.resultSets[0]) as unknown as Array<Record<string, any>>;
+      const existing = rows && rows.length > 0 ? rows[0] : null;
+
+      const newCount = existing ? Number(existing.RequestsCount || 0) + 1 : 1;
+      const status = existing ? Number(existing.Status ?? 0) : 0;
+
+      const upsertQuery = `
+        DECLARE $id AS Int64;
+        DECLARE $requests_count AS Int64;
+        DECLARE $status AS Int32;
+        DECLARE $profile_link AS Utf8;
+
+        UPSERT INTO \`Users\` (ID, CreatedAt, LastAccess, RequestsCount, Status, ProfileLink)
+        VALUES (
+          $id,
+          COALESCE((SELECT CreatedAt FROM \`Users\` WHERE ID = $id), CurrentUtcTimestamp()),
+          CurrentUtcTimestamp(),
+          $requests_count,
+          $status,
+          $profile_link
+        );
+      `;
+
+      await session.executeQuery(upsertQuery, {
+        '$id': TypedValues.int64(userId),
+        '$requests_count': TypedValues.int64(newCount),
+        '$status': TypedValues.int32(status),
+        '$profile_link': TypedValues.utf8(link)
+      }, AUTO_TX);
+
+      return {
+        id: userId,
+        createdAt: existing?.CreatedAt || new Date(),
+        lastAccess: new Date(),
+        requestsCount: newCount,
+        status,
+        profileLink: link
+      };
+    });
+  }
+
+  public async setUserStatus(userId: number, status: number): Promise<void> {
+    await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $id AS Int64;
+        DECLARE $status AS Int32;
+        UPDATE \`Users\` SET Status = $status WHERE ID = $id;
+      `;
+      await session.executeQuery(query, {
+        '$id': TypedValues.int64(userId),
+        '$status': TypedValues.int32(status)
+      }, AUTO_TX);
+    });
+  }
+
+  public async getUserRoles(userId: number): Promise<number[]> {
+    return await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $user AS Int64;
+        SELECT Role FROM \`Roles\` WHERE User = $user;
+      `;
+      const res = await session.executeQuery(query, {
+        '$user': TypedValues.int64(userId)
+      }, AUTO_TX);
+
+      const rows = TypedData.createNativeObjects(res.resultSets[0]) as unknown as Array<{ Role?: any }>;
+      return rows.map(r => Number(r.Role)).filter(n => !isNaN(n));
+    });
+  }
+
+  public async addUserRole(userId: number, role: number): Promise<void> {
+    await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $user AS Int64;
+        DECLARE $role AS Int32;
+        UPSERT INTO \`Roles\` (User, Role) VALUES ($user, $role);
+      `;
+      await session.executeQuery(query, {
+        '$user': TypedValues.int64(userId),
+        '$role': TypedValues.int32(role)
+      }, AUTO_TX);
+    });
+
+    this.roleUsersCache.delete(role);
+  }
+
+  public async removeUserRole(userId: number, role: number): Promise<void> {
+    await this.driver.tableClient.withSession(async (session) => {
+      const query = `
+        DECLARE $user AS Int64;
+        DECLARE $role AS Int32;
+        DELETE FROM \`Roles\` WHERE User = $user AND Role = $role;
+      `;
+      await session.executeQuery(query, {
+        '$user': TypedValues.int64(userId),
+        '$role': TypedValues.int32(role)
+      }, AUTO_TX);
+    });
+
+    this.roleUsersCache.delete(role);
+  }
+
+  public async getUsersByRole(role: number): Promise<number[]> {
+    const now = Date.now();
+    const cached = this.roleUsersCache.get(role);
+    if (cached && cached.expiresAt > now) {
+      return cached.users;
+    }
+
+    try {
+      const users = await this.driver.tableClient.withSession(async (session) => {
+        const query = `
+          DECLARE $role AS Int32;
+          SELECT User FROM \`Roles\` WHERE Role = $role;
+        `;
+        const res = await session.executeQuery(query, {
+          '$role': TypedValues.int32(role)
+        }, AUTO_TX);
+
+        const rows = TypedData.createNativeObjects(res.resultSets[0]) as unknown as Array<{ User?: any }>;
+        const userList = rows.map(r => Number(r.User)).filter(n => !isNaN(n));
+        return Array.from(new Set(userList));
+      });
+
+      this.roleUsersCache.set(role, { users, expiresAt: now + this.roleUsersCacheTtlMs });
+      return users;
+    } catch {
+      return [];
+    }
   }
 }

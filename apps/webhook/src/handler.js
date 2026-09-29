@@ -49,7 +49,7 @@ class WebhookHandler {
         // Ignore messages sent by group itself
         if (fromId < 0)
             return;
-        const command = (0, commands_js_1.parseCommand)(text);
+        const command = (0, commands_js_1.parseCommand)(text, msg.payload);
         switch (command.type) {
             case 'help': {
                 await this.sendReply(peerId, commands_js_1.HELP_MESSAGE, `help_${msg.id}`);
@@ -81,7 +81,15 @@ class WebhookHandler {
             await this.sendReply(peerId, `❌ Ошибка в адресе: ${err.message}\n\nПожалуйста, укажите корректный публичный URL (http или https).`, `invalid_${eventId}`);
             return;
         }
-        // 2. Rate limiting (atomic)
+        // 2. Check blocked user status and update access metrics
+        const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
+        if (userRecord && userRecord.status === 1) {
+            this.logger.warn(`Rejected request from blocked user ${fromId}`);
+            await this.sendReply(peerId, '⛔ Ваш доступ к сервису заблокирован администратором.', `blocked_${eventId}`);
+            return;
+        }
+        await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => { });
+        // 3. Rate limiting (atomic)
         const rateCheck = await this.jobStore.checkAndConsumeRateLimit(fromId, this.maxRequestsPerMinute, 60000);
         if (!rateCheck.allowed) {
             this.logger.warn(`User ${fromId} exceeded rate limit`);
@@ -110,8 +118,9 @@ class WebhookHandler {
             this.logger.error(`Outbox publication failed for job ${job.id}: ${err.message}`);
             // Job remains in accepted state for background sweeper retry
         }
-        // 5. Send asynchronous preparation confirmation to user
-        await this.sendReply(peerId, `⏳ Готовим удобную версию статьи...\nИдентификатор задания: ${job.id}\n\nВы можете проверить статус: /status ${job.id}`, `prep_${job.id}`);
+        // 5. Send asynchronous preparation confirmation to user with inline status button and text description
+        const statusKeyboard = (0, vk_1.createStatusKeyboard)(job.id);
+        await this.sendReply(peerId, `⏳ Готовим удобную версию статьи...\nИдентификатор задания: ${job.id}\n\nВы можете проверить статус с помощью кнопки ниже или командой:\n/status ${job.id}`, `prep_${job.id}`, statusKeyboard);
     }
     async handleStatusCommand(peerId, fromId, jobId, messageId) {
         const job = await this.jobStore.getJob(jobId);
@@ -155,7 +164,7 @@ class WebhookHandler {
 • URL: ${job.submittedUrl}`;
         await this.sendReply(peerId, reply, `status_resp_${messageId}`);
     }
-    async sendReply(peerId, message, seed) {
+    async sendReply(peerId, message, seed, keyboard) {
         if (!this.vkClient)
             return;
         try {
@@ -163,7 +172,8 @@ class WebhookHandler {
             await this.vkClient.sendMessage({
                 peerId,
                 message,
-                randomId
+                randomId,
+                keyboard
             });
         }
         catch (err) {

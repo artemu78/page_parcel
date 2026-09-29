@@ -12,12 +12,30 @@ async function bootstrap() {
     const confirmationCode = process.env.VK_CONFIRMATION_CODE || '';
     const vkToken = process.env.VK_GROUP_TOKEN || '';
     const ymqQueueUrl = process.env.YMQ_QUEUE_URL || '';
-    const jobStore = new jobs_1.MemoryJobStore();
+    const ydbEndpoint = process.env.YDB_ENDPOINT;
+    const ydbDatabase = process.env.YDB_DATABASE;
+    let jobStore;
+    if (ydbEndpoint && ydbDatabase) {
+        logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
+        const ydbStore = new jobs_1.YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+        await ydbStore.init();
+        jobStore = ydbStore;
+    }
+    else {
+        logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
+        jobStore = new jobs_1.MemoryJobStore();
+    }
+    const ymqAccessKey = process.env.YMQ_ACCESS_KEY;
+    const ymqSecretKey = process.env.YMQ_SECRET_KEY;
     let queueClient;
     if (ymqQueueUrl) {
         queueClient = new jobs_1.SqsQueueClient({
             queueUrl: ymqQueueUrl,
-            region: process.env.AWS_REGION || 'ru-central1'
+            region: process.env.AWS_REGION || 'ru-central1',
+            credentials: (ymqAccessKey && ymqSecretKey) ? {
+                accessKeyId: ymqAccessKey,
+                secretAccessKey: ymqSecretKey
+            } : undefined
         });
     }
     else {

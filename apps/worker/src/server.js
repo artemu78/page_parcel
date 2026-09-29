@@ -43,7 +43,7 @@ class WorkerServer {
     logger;
     triggerSecret;
     constructor(options) {
-        this.port = options.port ?? (Number.parseInt(process.env.WORKER_PORT || process.env.PORT || '8081', 10));
+        this.port = options.port ?? (Number.parseInt(process.env.PORT || process.env.WORKER_PORT || '8080', 10));
         this.processor = options.processor;
         this.logger = (options.logger ?? observability_1.defaultLogger).child({ component: 'WorkerServer' });
         this.triggerSecret = options.triggerSecret;
@@ -108,22 +108,35 @@ class WorkerServer {
                 try {
                     const bodyStr = Buffer.concat(chunks).toString('utf-8');
                     const bodyJson = JSON.parse(bodyStr);
-                    // Support both standard Yandex Message Queue Trigger payload:
-                    // { "messages": [ { "details": { "body": "...", "message_id": "..." } } ] }
-                    // and direct JSON payload { "jobId": "..." }
+                    this.logger.info(`Received trigger payload: ${bodyStr.slice(0, 500)}`);
                     let jobIds = [];
+                    // 1. Check messages array (standard YMQ trigger)
                     if (Array.isArray(bodyJson?.messages) && bodyJson.messages.length > 0) {
                         for (const msg of bodyJson.messages) {
-                            const rawBody = msg?.details?.body;
+                            const rawBody = msg?.details?.body ?? msg?.details?.message?.body ?? msg?.body ?? msg?.details?.message;
                             if (rawBody) {
-                                try {
-                                    const parsedMsg = JSON.parse(rawBody);
-                                    if (parsedMsg.jobId)
-                                        jobIds.push(parsedMsg.jobId);
+                                if (typeof rawBody === 'object' && rawBody.jobId) {
+                                    jobIds.push(rawBody.jobId);
                                 }
-                                catch {
-                                    // If rawBody is just the jobId string
-                                    jobIds.push(rawBody);
+                                else if (typeof rawBody === 'string') {
+                                    try {
+                                        const parsedMsg = JSON.parse(rawBody);
+                                        if (parsedMsg.jobId)
+                                            jobIds.push(parsedMsg.jobId);
+                                    }
+                                    catch {
+                                        // Try base64
+                                        try {
+                                            const decoded = Buffer.from(rawBody, 'base64').toString('utf-8');
+                                            const parsed = JSON.parse(decoded);
+                                            if (parsed.jobId)
+                                                jobIds.push(parsed.jobId);
+                                        }
+                                        catch {
+                                            if (rawBody.startsWith('job_'))
+                                                jobIds.push(rawBody);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -131,8 +144,16 @@ class WorkerServer {
                     else if (bodyJson?.jobId) {
                         jobIds.push(bodyJson.jobId);
                     }
+                    // 2. Fallback: extract any job ID matching pattern job_<timestamp>_<hash>
                     if (jobIds.length === 0) {
-                        this.logger.warn('Trigger payload contained no recognized job IDs');
+                        const matches = bodyStr.match(/job_\d+_[a-z0-9]+/g);
+                        if (matches && matches.length > 0) {
+                            jobIds = Array.from(new Set(matches));
+                            this.logger.info(`Extracted job IDs via pattern match: ${jobIds.join(', ')}`);
+                        }
+                    }
+                    if (jobIds.length === 0) {
+                        this.logger.warn(`Trigger payload contained no recognized job IDs: ${bodyStr}`);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ status: 'ignored', reason: 'no_jobs' }));
                         return;

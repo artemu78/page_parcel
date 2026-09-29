@@ -58,4 +58,24 @@ export interface VkSaveDocResponse {
         date: number;
     };
 }
+export type VkButtonColor = 'primary' | 'secondary' | 'positive' | 'negative';
+export interface VkKeyboardButtonAction {
+    type: string;
+    label?: string;
+    payload?: string;
+    link?: string;
+    app_id?: number;
+    owner_id?: number;
+    hash?: string;
+    [key: string]: unknown;
+}
+export interface VkKeyboardButton {
+    action: VkKeyboardButtonAction;
+    color?: VkButtonColor;
+}
+export interface VkKeyboard {
+    one_time?: boolean;
+    inline?: boolean;
+    buttons: VkKeyboardButton[][];
+}
 //# sourceMappingURL=types.d.ts.map

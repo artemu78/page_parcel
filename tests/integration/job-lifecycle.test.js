@@ -131,9 +131,50 @@ class MockVkClient extends index_js_2.VkApiClient {
         assert.ok(job !== null);
         assert.equal(job.status, 'queued');
         assert.equal(job.submittedUrl, 'https://example.org/valid-article');
-        // Verify preparation message sent
+        // Verify preparation message sent with button and text description
         const prepMsg = mockVk.sentMessages.find(m => m.message.includes('Готовим удобную версию'));
         assert.ok(prepMsg !== undefined);
+        assert.ok(prepMsg.message.includes(`/status ${job.id}`));
+        assert.ok(prepMsg.keyboard !== undefined);
+        const keyboard = JSON.parse(prepMsg.keyboard);
+        assert.equal(keyboard.inline, true);
+        assert.equal(keyboard.buttons[0][0].action.label, '📊 Проверить статус');
+        const buttonPayload = JSON.parse(keyboard.buttons[0][0].action.payload);
+        assert.deepEqual(buttonPayload, { command: 'status', jobId: job.id });
+    });
+    (0, node_test_1.it)('responds to status button click event with job status', async () => {
+        // 1. Create a job for user 200
+        const { job } = await store.createJobIfNotExist({
+            ownerId: 200,
+            peerId: 200,
+            eventId: 'evt_btn_source',
+            submittedUrl: 'https://example.org/button-test'
+        });
+        // 2. User clicks status button, generating a message_new with button payload
+        const callbackPayload = {
+            type: 'message_new',
+            group_id: 12345,
+            secret: 'secret_123',
+            event_id: 'evt_btn_click_1',
+            object: {
+                message: {
+                    id: 55,
+                    date: 1600000010,
+                    peer_id: 200,
+                    from_id: 200,
+                    text: '📊 Проверить статус',
+                    payload: JSON.stringify({ command: 'status', jobId: job.id })
+                }
+            }
+        };
+        const res = await webhook.handleRequest(callbackPayload);
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body, 'ok');
+        await new Promise((r) => setTimeout(r, 50));
+        // Verify status reply was sent to user
+        const statusMsg = mockVk.sentMessages.find(m => m.message.includes(`Статус задания ${job.id}`));
+        assert.ok(statusMsg !== undefined);
+        assert.ok(statusMsg.message.includes('Состояние: В очереди на обработку'));
     });
     (0, node_test_1.it)('handles duplicate callback events idempotently without double-enqueuing', async () => {
         const callbackPayload = {
@@ -247,6 +288,76 @@ class MockVkClient extends index_js_2.VkApiClient {
         assert.ok(failMsg !== undefined);
         assert.ok(failMsg.message.includes(job.id));
         assert.ok(failMsg.message.includes('Адрес заблокирован'));
+        await worker.close();
+    });
+    (0, node_test_1.it)('sends error logs to users with role 2 (ErrorListeners)', async () => {
+        const listenerId1 = 888222;
+        const listenerId2 = 777333;
+        await store.addUserRole(listenerId1, 2);
+        await store.addUserRole(listenerId2, 2);
+        const { job } = await store.createJobIfNotExist({
+            ownerId: 555000,
+            peerId: 555000,
+            eventId: 'evt_listener_test',
+            submittedUrl: 'http://127.0.0.1/blocked'
+        });
+        const worker = new job_processor_js_1.JobProcessor({
+            jobStore: store,
+            vkClient: mockVk,
+            workerId: 'worker_listen'
+        });
+        await worker.processJob(job.id);
+        // Verify both listeners received error log messages
+        const listener1Msgs = mockVk.sentMessages.filter(m => m.peerId === listenerId1);
+        const listener2Msgs = mockVk.sentMessages.filter(m => m.peerId === listenerId2);
+        assert.equal(listener1Msgs.length, 1);
+        assert.equal(listener2Msgs.length, 1);
+        const logMsg = listener1Msgs[0].message;
+        assert.ok(logMsg.includes(job.id));
+        assert.ok(logMsg.includes('http://127.0.0.1/blocked'));
+        assert.ok(logMsg.includes('https://vk.com/id555000'));
+        assert.ok(logMsg.includes('403') || logMsg.includes('UPSTREAM_ERROR') || logMsg.includes('SSRF'));
+        await worker.close();
+    });
+    (0, node_test_1.it)('sends article variable and requester link on CONTENT_UNSUPPORTED extraction error', async () => {
+        const listenerId = 444333;
+        await store.addUserRole(listenerId, 2);
+        const { job } = await store.createJobIfNotExist({
+            ownerId: 777123,
+            peerId: 777123,
+            eventId: 'evt_extract_err_test',
+            submittedUrl: 'https://example.com/short-article'
+        });
+        const worker = new job_processor_js_1.JobProcessor({
+            jobStore: store,
+            vkClient: mockVk,
+            workerId: 'worker_extract_fail'
+        });
+        // Mock renderAndExtract to simulate ContentExtractionError with article
+        const mockArticle = {
+            title: 'Tiny Test Page',
+            byline: 'Test Author',
+            textContent: 'Too short',
+            length: 9
+        };
+        const extractionError = new Error('CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than 100 characters)');
+        extractionError.article = mockArticle;
+        worker.browserManager = {
+            renderAndExtract: async () => {
+                throw extractionError;
+            },
+            close: async () => { }
+        };
+        await worker.processJob(job.id);
+        const listenerMsgs = mockVk.sentMessages.filter(m => m.peerId === listenerId);
+        assert.equal(listenerMsgs.length, 1);
+        const logMsg = listenerMsgs[0].message;
+        assert.ok(logMsg.includes(job.id));
+        assert.ok(logMsg.includes('Could not extract meaningful readable content'));
+        assert.ok(logMsg.includes('https://example.com/short-article'));
+        assert.ok(logMsg.includes('https://vk.com/id777123'));
+        assert.ok(logMsg.includes('Tiny Test Page'));
+        assert.ok(logMsg.includes('Too short'));
         await worker.close();
     });
 });

@@ -63,22 +63,28 @@ class VkApiClient {
         });
     }
     async uploadPdfDocument(uploadUrl, pdfBuffer, filename) {
-        this.logger.debug(`Uploading PDF document (${pdfBuffer.length} bytes) to VK upload server`);
+        const targetUrl = uploadUrl.replace(/^http:\/\//i, 'https://');
+        this.logger.info(`Uploading PDF document (${pdfBuffer.length} bytes, file: ${filename}) to VK upload server: ${targetUrl}`);
         const formData = new FormData();
         const blob = new Blob([new Uint8Array(pdfBuffer)], { type: 'application/pdf' });
         formData.append('file', blob, filename);
         let res;
         try {
-            res = await fetch(uploadUrl, {
+            res = await fetch(targetUrl, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
             });
         }
         catch (err) {
             throw new Error(`Failed to upload PDF to VK: ${(0, observability_1.redactSensitiveData)(err.message)}`);
         }
         if (!res.ok) {
-            throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText}`);
+            const errBody = await res.text().catch(() => '');
+            this.logger.error(`VK upload server HTTP error: ${res.status} ${res.statusText} on ${targetUrl}. Response: ${errBody.slice(0, 500)}`);
+            throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText} - ${errBody.slice(0, 200)}`);
         }
         const json = (await res.json());
         if (!json.file) {
@@ -100,6 +106,9 @@ class VkApiClient {
         };
         if (params.attachment) {
             callParams.attachment = params.attachment;
+        }
+        if (params.keyboard) {
+            callParams.keyboard = params.keyboard;
         }
         return this.callMethod('messages.send', callParams);
     }

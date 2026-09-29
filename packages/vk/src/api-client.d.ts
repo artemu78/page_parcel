@@ -25,6 +25,7 @@ export declare class VkApiClient {
         message: string;
         attachment?: string;
         randomId: number;
+        keyboard?: string;
     }): Promise<number>;
 }
 //# sourceMappingURL=api-client.d.ts.map

@@ -1,10 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MemoryJobStore = void 0;
+const types_js_1 = require("./types.js");
 class MemoryJobStore {
     jobs = new Map();
     eventIndex = new Map(); // eventId -> jobId
     userRateLimits = new Map(); // userId -> timestamps
+    settings = new Map();
+    users = new Map();
+    roles = [];
     async createJobIfNotExist(params) {
         const existingJobId = this.eventIndex.get(params.eventId);
         if (existingJobId) {
@@ -140,6 +144,70 @@ class MemoryJobStore {
         validTimestamps.push(now);
         this.userRateLimits.set(userId, validTimestamps);
         return { allowed: true };
+    }
+    async getSettings() {
+        return (0, types_js_1.parseSettingsMap)(this.settings);
+    }
+    async setSetting(key, value) {
+        this.settings.set(key, value);
+    }
+    async deleteSetting(key) {
+        this.settings.delete(key);
+    }
+    async getUser(userId) {
+        const user = this.users.get(userId);
+        return user ? { ...user } : null;
+    }
+    async upsertUserAccess(userId, profileLink) {
+        const now = Date.now();
+        const existing = this.users.get(userId);
+        const link = profileLink || `https://vk.com/id${userId}`;
+        if (existing) {
+            existing.lastAccess = now;
+            existing.requestsCount += 1;
+            existing.profileLink = link;
+            return { ...existing };
+        }
+        const newUser = {
+            id: userId,
+            createdAt: now,
+            lastAccess: now,
+            requestsCount: 1,
+            status: 0,
+            profileLink: link
+        };
+        this.users.set(userId, newUser);
+        return { ...newUser };
+    }
+    async setUserStatus(userId, status) {
+        const user = this.users.get(userId);
+        if (user) {
+            user.status = status;
+        }
+        else {
+            this.users.set(userId, {
+                id: userId,
+                createdAt: Date.now(),
+                lastAccess: Date.now(),
+                requestsCount: 0,
+                status,
+                profileLink: `https://vk.com/id${userId}`
+            });
+        }
+    }
+    async getUserRoles(userId) {
+        return this.roles.filter(r => r.user === userId).map(r => r.role);
+    }
+    async addUserRole(userId, role) {
+        if (!this.roles.some(r => r.user === userId && r.role === role)) {
+            this.roles.push({ user: userId, role });
+        }
+    }
+    async removeUserRole(userId, role) {
+        this.roles = this.roles.filter(r => !(r.user === userId && r.role === role));
+    }
+    async getUsersByRole(role) {
+        return Array.from(new Set(this.roles.filter(r => r.role === role).map(r => r.user)));
     }
 }
 exports.MemoryJobStore = MemoryJobStore;

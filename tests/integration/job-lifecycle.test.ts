@@ -309,4 +309,95 @@ describe('Integration - Job Lifecycle and Recovery', () => {
 
     await worker.close();
   });
+
+  it('sends error logs to users with role 2 (ErrorListeners)', async () => {
+    const listenerId1 = 888222;
+    const listenerId2 = 777333;
+
+    await store.addUserRole(listenerId1, 2);
+    await store.addUserRole(listenerId2, 2);
+
+    const { job } = await store.createJobIfNotExist({
+      ownerId: 555000,
+      peerId: 555000,
+      eventId: 'evt_listener_test',
+      submittedUrl: 'http://127.0.0.1/blocked'
+    });
+
+    const worker = new JobProcessor({
+      jobStore: store,
+      vkClient: mockVk,
+      workerId: 'worker_listen'
+    });
+
+    await worker.processJob(job.id);
+
+    // Verify both listeners received error log messages
+    const listener1Msgs = mockVk.sentMessages.filter(m => m.peerId === listenerId1);
+    const listener2Msgs = mockVk.sentMessages.filter(m => m.peerId === listenerId2);
+
+    assert.equal(listener1Msgs.length, 1);
+    assert.equal(listener2Msgs.length, 1);
+
+    const logMsg = listener1Msgs[0].message;
+    assert.ok(logMsg.includes(job.id));
+    assert.ok(logMsg.includes('http://127.0.0.1/blocked'));
+    assert.ok(logMsg.includes('https://vk.com/id555000'));
+    assert.ok(logMsg.includes('403') || logMsg.includes('UPSTREAM_ERROR') || logMsg.includes('SSRF'));
+
+    await worker.close();
+  });
+
+  it('sends article variable and requester link on CONTENT_UNSUPPORTED extraction error', async () => {
+    const listenerId = 444333;
+    await store.addUserRole(listenerId, 2);
+
+    const { job } = await store.createJobIfNotExist({
+      ownerId: 777123,
+      peerId: 777123,
+      eventId: 'evt_extract_err_test',
+      submittedUrl: 'https://example.com/short-article'
+    });
+
+    const worker = new JobProcessor({
+      jobStore: store,
+      vkClient: mockVk,
+      workerId: 'worker_extract_fail'
+    });
+
+    // Mock renderAndExtract to simulate ContentExtractionError with article
+    const mockArticle = {
+      title: 'Tiny Test Page',
+      byline: 'Test Author',
+      textContent: 'Too short',
+      length: 9
+    };
+
+    const extractionError: any = new Error(
+      'CONTENT_UNSUPPORTED: Could not extract meaningful readable content (extracted text was shorter than 100 characters)'
+    );
+    extractionError.article = mockArticle;
+
+    (worker as any).browserManager = {
+      renderAndExtract: async () => {
+        throw extractionError;
+      },
+      close: async () => {}
+    };
+
+    await worker.processJob(job.id);
+
+    const listenerMsgs = mockVk.sentMessages.filter(m => m.peerId === listenerId);
+    assert.equal(listenerMsgs.length, 1);
+
+    const logMsg = listenerMsgs[0].message;
+    assert.ok(logMsg.includes(job.id));
+    assert.ok(logMsg.includes('Could not extract meaningful readable content'));
+    assert.ok(logMsg.includes('https://example.com/short-article'));
+    assert.ok(logMsg.includes('https://vk.com/id777123'));
+    assert.ok(logMsg.includes('Tiny Test Page'));
+    assert.ok(logMsg.includes('Too short'));
+
+    await worker.close();
+  });
 });

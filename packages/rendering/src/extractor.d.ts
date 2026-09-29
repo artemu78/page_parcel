@@ -6,6 +6,10 @@ export interface ExtractedArticle {
     textContent: string;
     length: number;
 }
+export declare class ContentExtractionError extends Error {
+    article: any;
+    constructor(message: string, article?: any);
+}
 export declare class ContentExtractor {
     private minTextLength;
     constructor(minTextLength?: number);
