@@ -63,6 +63,7 @@ export interface JobQueueMessage {
 export interface AppSettings {
   adminId?: number;
   errorListeners: number[];
+  maxRequestsPerJob?: number;
   raw: Record<string, string>;
 }
 
@@ -78,6 +79,15 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
     }
     return undefined;
   };
+
+  let maxRequestsPerJob: number | undefined;
+  const maxReqRaw = getVal('MaxRequestsPerJob') ?? getVal('MaxRequests');
+  if (maxReqRaw !== undefined && maxReqRaw.trim().length > 0) {
+    const parsed = Number(maxReqRaw.trim());
+    if (!isNaN(parsed) && parsed > 0) {
+      maxRequestsPerJob = parsed;
+    }
+  }
 
   let adminId: number | undefined;
   const adminIdRaw = getVal('AdminID');
@@ -119,6 +129,7 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
   return {
     adminId,
     errorListeners,
+    maxRequestsPerJob,
     raw
   };
 }

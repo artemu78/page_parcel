@@ -44,8 +44,28 @@ export class JobProcessor {
 
     this.logger.info(`Claimed job ${job.id} (attempt ${job.attempts}/${job.maxAttempts})`);
 
+    // Determine request budget per job (from dynamic settings, env, or default 500)
+    let maxRequests = 500;
+    const envMaxReq = process.env.MAX_REQUESTS_PER_JOB ? parseInt(process.env.MAX_REQUESTS_PER_JOB, 10) : undefined;
+    if (envMaxReq && !isNaN(envMaxReq)) {
+      maxRequests = envMaxReq;
+    }
+    try {
+      if (this.jobStore.getSettings) {
+        const settings = await this.jobStore.getSettings();
+        if (settings.maxRequestsPerJob) {
+          maxRequests = settings.maxRequestsPerJob;
+        }
+      }
+    } catch {
+      // Best effort setting resolution
+    }
+
     // Start local validating egress proxy for this job
-    const proxy = new ValidatingEgressProxy({ logger: this.logger });
+    const proxy = new ValidatingEgressProxy({
+      logger: this.logger,
+      limits: { maxRequestsPerJob: maxRequests }
+    });
     let proxyPort = 0;
 
     try {
@@ -63,7 +83,8 @@ export class JobProcessor {
         const renderResult = await this.browserManager.renderAndExtract({
           url: job.submittedUrl,
           egressProxyUrl: proxyUrl,
-          timeoutMs: 45000
+          timeoutMs: 45000,
+          maxRequests
         });
 
         finalTitle = renderResult.title;
@@ -144,9 +165,10 @@ export class JobProcessor {
       const errorMsg = (err as Error).message || String(err);
       this.logger.error(`Error processing job ${job.id}: ${errorMsg}`);
       const article = (err as any)?.article;
+      const diagnostics = (err as any)?.diagnostics;
 
       // Send error details to configured ErrorListeners
-      await this.notifyErrorListeners(job, errorMsg, article).catch((listenerErr) => {
+      await this.notifyErrorListeners(job, errorMsg, article, diagnostics).catch((listenerErr) => {
         this.logger.warn(`Failed to notify error listeners for job ${job.id}: ${(listenerErr as Error).message}`);
       });
 
@@ -192,10 +214,26 @@ export class JobProcessor {
     }
 
     if (errMsg.includes('CONTENT_UNSUPPORTED') || errMsg.includes('CONTENT_EMPTY')) {
+      let customUserMessage = 'Не удалось извлечь текст статьи. Возможно, страница защищена авторизацией, капчей или пуста.';
+      if (
+        errMsg.includes('Anti-bot challenge') ||
+        errMsg.includes('captcha') ||
+        errMsg.includes('Cloudflare')
+      ) {
+        customUserMessage = 'Не удалось подготовить PDF: целевой сайт защищен проверкой на роботов (капчей или защитой от DDoS).';
+      } else if (
+        errMsg.includes('Authentication or paywall') ||
+        errMsg.includes('login or subscription')
+      ) {
+        customUserMessage = 'Не удалось извлечь статью: целевой сайт требует авторизации или платной подписки.';
+      } else if (errMsg.includes('HTML body is empty')) {
+        customUserMessage = 'Не удалось извлечь статью: страница оказалась пустой или не смогла отобразиться в браузере.';
+      }
+
       return {
         category: 'CONTENT_UNSUPPORTED',
         isTerminal: true,
-        userMessage: 'Не удалось извлечь текст статьи. Возможно, страница защищена авторизацией, капчей или пуста.'
+        userMessage: customUserMessage
       };
     }
 
@@ -237,7 +275,7 @@ export class JobProcessor {
       const randomId = generateStableRandomId(`fail_${job.id}`);
       await this.vkClient.sendMessage({
         peerId: job.peerId,
-        message: `❌ Не удалось подготовить PDF для задания ${job.id}:\n${reason}`,
+        message: `❌ Не удалось подготовить PDF для задания ${job.id}:\n${reason}\n\nИзвините нас, мы уже получили уведомление об ошибке и будем исправлять, мы вам сообщим.`,
         randomId
       });
     } catch (err) {
@@ -245,7 +283,12 @@ export class JobProcessor {
     }
   }
 
-  private async notifyErrorListeners(job: Job, errorMsg: string, article?: any): Promise<void> {
+  private async notifyErrorListeners(
+    job: Job,
+    errorMsg: string,
+    article?: any,
+    diagnostics?: any
+  ): Promise<void> {
     if (!this.vkClient) return;
 
     let errorListeners: number[] = [];
@@ -270,6 +313,23 @@ export class JobProcessor {
 • Ошибка: ${errorMsg}
 • URL: ${job.submittedUrl}
 • Пользователь: https://vk.com/id${job.ownerId} (id${job.ownerId})`;
+
+    if (diagnostics) {
+      message += `\n\n🔍 Диагностика страницы:
+• Причина: ${diagnostics.failureReason || 'Недостаточно текста'}
+• Заголовок (<title>): ${diagnostics.docTitle ? JSON.stringify(diagnostics.docTitle) : '(пусто)'}
+• Размер HTML: ${diagnostics.rawHtmlLength} байт
+• Длина текста в body: ${diagnostics.bodyTextLength} симв.
+• Итоговый URL: ${diagnostics.finalUrl || job.submittedUrl}${diagnostics.finalUrl && diagnostics.finalUrl !== job.submittedUrl ? ' ⚠️ (был редирект)' : ''}
+• HTTP статус: ${diagnostics.httpStatus || 200}
+• Запросов страницы: ${diagnostics.totalRequests ?? 'н/д'}`;
+      if (diagnostics.semanticCandidatesFound?.length > 0) {
+        message += `\n• Найденные селекторы: [${diagnostics.semanticCandidatesFound.join(', ')}]`;
+      }
+      if (diagnostics.bodyTextSnippet) {
+        message += `\n• Фрагмент текста со страницы: "${diagnostics.bodyTextSnippet}"`;
+      }
+    }
 
     if (isExtractionError) {
       const formattedArticle = this.formatArticleForLog(article);

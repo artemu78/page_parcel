@@ -292,7 +292,7 @@ CREATE TABLE Roles (
 
 #### 3. Error Notification Delivery
 * When an error occurs during job processing, the error details (error text, job ID, requested URL, requester profile link `https://vk.com/id...`) are automatically sent to all users with **Role `2` (`ErrorListeners`)** in the `Roles` table.
-* For content extraction errors (`"Could not extract meaningful readable content"`), the alert additionally includes the stringified value of the Readability `article` variable (title, excerpt, text snippet, length) for instant diagnostic inspection without redeploying.
+* For content extraction errors (`"Could not extract meaningful readable content"`), the alert additionally includes a **`🔍 Диагностика страницы:`** section (probable root cause, `<title>`, HTML byte length, body text length, text snippet, redirect detection, HTTP status, request count) along with the stringified value of the Readability `article` variable for instant diagnostic inspection without redeploying.
 
 #### 4. Common Management Queries
 ```sql

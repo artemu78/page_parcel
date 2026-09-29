@@ -9,13 +9,15 @@ const index_js_1 = require("../../packages/jobs/dist/index.js");
 const index_js_2 = require("../../packages/rendering/dist/index.js");
 (0, node_test_1.describe)('Settings Parsing and Store', () => {
     (0, node_test_1.it)('parses AdminID and ErrorListeners correctly from various formats', () => {
-        // 1. Valid JSON array and numeric AdminID
+        // 1. Valid JSON array, numeric AdminID, and MaxRequestsPerJob
         const s1 = (0, index_js_1.parseSettingsMap)({
             AdminID: '123456789',
-            ErrorListeners: '[123456789, 987654321, 123456789]'
+            ErrorListeners: '[123456789, 987654321, 123456789]',
+            MaxRequestsPerJob: '350'
         });
         strict_1.default.equal(s1.adminId, 123456789);
         strict_1.default.deepEqual(s1.errorListeners, [123456789, 987654321]); // deduplicated
+        strict_1.default.equal(s1.maxRequestsPerJob, 350);
         // 2. Comma-separated string and case-insensitive keys
         const s2 = (0, index_js_1.parseSettingsMap)({
             adminid: ' 555666 ',
@@ -50,8 +52,8 @@ const index_js_2 = require("../../packages/rendering/dist/index.js");
         strict_1.default.equal(afterDelete.raw['ErrorListeners'], undefined);
     });
 });
-(0, node_test_1.describe)('ContentExtractor Error with Article Context', () => {
-    (0, node_test_1.it)('throws ContentExtractionError containing the Readability article when content is too short', () => {
+(0, node_test_1.describe)('ContentExtractor Error with Article Context and Diagnostics', () => {
+    (0, node_test_1.it)('throws ContentExtractionError containing the Readability article and diagnostics when content is too short', () => {
         const extractor = new index_js_2.ContentExtractor(100);
         const shortHtml = `
       <!DOCTYPE html>
@@ -63,9 +65,46 @@ const index_js_2 = require("../../packages/rendering/dist/index.js");
         strict_1.default.throws(() => extractor.extract(shortHtml, 'https://example.com/short'), (err) => {
             strict_1.default.ok(err instanceof index_js_2.ContentExtractionError);
             strict_1.default.ok(err.message.includes('Could not extract meaningful readable content'));
+            strict_1.default.ok(err.message.includes('htmlLen'));
+            strict_1.default.ok(err.message.includes('Short Page Title'));
             strict_1.default.ok(err.article !== undefined);
             strict_1.default.equal(err.article?.title, 'Short Page Title');
             strict_1.default.ok(typeof err.article?.textContent === 'string');
+            // Check structured diagnostics
+            strict_1.default.ok(err.diagnostics !== undefined);
+            strict_1.default.equal(err.diagnostics.docTitle, 'Short Page Title');
+            strict_1.default.ok(err.diagnostics.rawHtmlLength > 50);
+            strict_1.default.ok(err.diagnostics.bodyTextLength > 0);
+            strict_1.default.ok(err.diagnostics.semanticCandidatesFound.includes('article'));
+            strict_1.default.equal(err.diagnostics.readabilityReturned, true);
+            return true;
+        });
+    });
+    (0, node_test_1.it)('diagnoses anti-bot / captcha challenge accurately', () => {
+        const extractor = new index_js_2.ContentExtractor(100);
+        const cloudflareHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Just a moment...</title></head>
+        <body><p>Verify you are human by completing the action below.</p></body>
+      </html>
+    `;
+        strict_1.default.throws(() => extractor.extract(cloudflareHtml, 'https://example.com/protected'), (err) => {
+            strict_1.default.ok(err instanceof index_js_2.ContentExtractionError);
+            strict_1.default.ok(err.diagnostics?.failureReason.includes('Anti-bot challenge'));
+            strict_1.default.ok(err.message.includes('Anti-bot challenge'));
+            strict_1.default.equal(err.diagnostics?.docTitle, 'Just a moment...');
+            return true;
+        });
+    });
+    (0, node_test_1.it)('diagnoses empty or blank page accurately', () => {
+        const extractor = new index_js_2.ContentExtractor(100);
+        const blankHtml = `<html><head></head><body></body></html>`;
+        strict_1.default.throws(() => extractor.extract(blankHtml, 'https://example.com/blank'), (err) => {
+            strict_1.default.ok(err instanceof index_js_2.ContentExtractionError);
+            strict_1.default.ok(err.diagnostics?.failureReason.includes('empty or blank'));
+            strict_1.default.equal(err.diagnostics?.bodyTextLength, 0);
+            strict_1.default.equal(err.diagnostics?.readabilityReturned, false);
             return true;
         });
     });

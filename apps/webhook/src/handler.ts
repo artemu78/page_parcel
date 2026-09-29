@@ -246,7 +246,7 @@ export class WebhookHandler {
         statusText = '✅ Успешно завершено';
         break;
       case 'failed':
-        statusText = `❌ Ошибка: ${job.safeErrorMessage || 'Не удалось обработать страницу'}`;
+        statusText = `❌ Ошибка: ${job.safeErrorMessage || 'Не удалось обработать страницу'}\n\n(Извините нас, мы уже получили уведомление об ошибке и будем исправлять, мы вам сообщим.)`;
         break;
     }
 

@@ -5,13 +5,15 @@ import { ContentExtractor, ContentExtractionError } from '../../packages/renderi
 
 describe('Settings Parsing and Store', () => {
   it('parses AdminID and ErrorListeners correctly from various formats', () => {
-    // 1. Valid JSON array and numeric AdminID
+    // 1. Valid JSON array, numeric AdminID, and MaxRequestsPerJob
     const s1 = parseSettingsMap({
       AdminID: '123456789',
-      ErrorListeners: '[123456789, 987654321, 123456789]'
+      ErrorListeners: '[123456789, 987654321, 123456789]',
+      MaxRequestsPerJob: '350'
     });
     assert.equal(s1.adminId, 123456789);
     assert.deepEqual(s1.errorListeners, [123456789, 987654321]); // deduplicated
+    assert.equal(s1.maxRequestsPerJob, 350);
 
     // 2. Comma-separated string and case-insensitive keys
     const s2 = parseSettingsMap({
@@ -54,8 +56,8 @@ describe('Settings Parsing and Store', () => {
   });
 });
 
-describe('ContentExtractor Error with Article Context', () => {
-  it('throws ContentExtractionError containing the Readability article when content is too short', () => {
+describe('ContentExtractor Error with Article Context and Diagnostics', () => {
+  it('throws ContentExtractionError containing the Readability article and diagnostics when content is too short', () => {
     const extractor = new ContentExtractor(100);
     const shortHtml = `
       <!DOCTYPE html>
@@ -70,9 +72,57 @@ describe('ContentExtractor Error with Article Context', () => {
       (err: any) => {
         assert.ok(err instanceof ContentExtractionError);
         assert.ok(err.message.includes('Could not extract meaningful readable content'));
+        assert.ok(err.message.includes('htmlLen'));
+        assert.ok(err.message.includes('Short Page Title'));
         assert.ok(err.article !== undefined);
         assert.equal(err.article?.title, 'Short Page Title');
         assert.ok(typeof err.article?.textContent === 'string');
+
+        // Check structured diagnostics
+        assert.ok(err.diagnostics !== undefined);
+        assert.equal(err.diagnostics.docTitle, 'Short Page Title');
+        assert.ok(err.diagnostics.rawHtmlLength > 50);
+        assert.ok(err.diagnostics.bodyTextLength > 0);
+        assert.ok(err.diagnostics.semanticCandidatesFound.includes('article'));
+        assert.equal(err.diagnostics.readabilityReturned, true);
+        return true;
+      }
+    );
+  });
+
+  it('diagnoses anti-bot / captcha challenge accurately', () => {
+    const extractor = new ContentExtractor(100);
+    const cloudflareHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Just a moment...</title></head>
+        <body><p>Verify you are human by completing the action below.</p></body>
+      </html>
+    `;
+
+    assert.throws(
+      () => extractor.extract(cloudflareHtml, 'https://example.com/protected'),
+      (err: any) => {
+        assert.ok(err instanceof ContentExtractionError);
+        assert.ok(err.diagnostics?.failureReason.includes('Anti-bot challenge'));
+        assert.ok(err.message.includes('Anti-bot challenge'));
+        assert.equal(err.diagnostics?.docTitle, 'Just a moment...');
+        return true;
+      }
+    );
+  });
+
+  it('diagnoses empty or blank page accurately', () => {
+    const extractor = new ContentExtractor(100);
+    const blankHtml = `<html><head></head><body></body></html>`;
+
+    assert.throws(
+      () => extractor.extract(blankHtml, 'https://example.com/blank'),
+      (err: any) => {
+        assert.ok(err instanceof ContentExtractionError);
+        assert.ok(err.diagnostics?.failureReason.includes('empty or blank'));
+        assert.equal(err.diagnostics?.bodyTextLength, 0);
+        assert.equal(err.diagnostics?.readabilityReturned, false);
         return true;
       }
     );

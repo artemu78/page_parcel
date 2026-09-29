@@ -39,7 +39,8 @@ export class ValidatingEgressProxy {
     this.dnsResolver = options.dnsResolver ?? defaultDnsResolver;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'EgressProxy' });
 
-    this.maxRequestsPerJob = options.limits?.maxRequestsPerJob ?? 100;
+    const envMaxRequests = process.env.MAX_REQUESTS_PER_JOB ? parseInt(process.env.MAX_REQUESTS_PER_JOB, 10) : undefined;
+    this.maxRequestsPerJob = options.limits?.maxRequestsPerJob ?? (envMaxRequests && !isNaN(envMaxRequests) ? envMaxRequests : 500);
     this.maxBytesPerResponse = options.limits?.maxBytesPerResponse ?? 5 * 1024 * 1024; // 5 MiB
     this.maxAggregateBytes = options.limits?.maxAggregateBytes ?? 20 * 1024 * 1024; // 20 MiB
 

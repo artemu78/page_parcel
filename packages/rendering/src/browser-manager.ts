@@ -1,6 +1,6 @@
 import { chromium, Browser, BrowserContext, Page, devices } from 'playwright';
 import { Logger, defaultLogger } from '@readable-web/observability';
-import { ContentExtractor, ExtractedArticle } from './extractor.js';
+import { ContentExtractor, ContentExtractionError, ExtractedArticle } from './extractor.js';
 
 export interface RenderJobOptions {
   url: string;
@@ -58,7 +58,8 @@ export class BrowserManager {
   public async renderAndExtract(options: RenderJobOptions): Promise<RenderResult> {
     const browser = await this.getBrowser();
     const timeoutMs = options.timeoutMs ?? 45000;
-    const maxRequests = options.maxRequests ?? 100;
+    const envMaxRequests = process.env.MAX_REQUESTS_PER_JOB ? parseInt(process.env.MAX_REQUESTS_PER_JOB, 10) : undefined;
+    const maxRequests = options.maxRequests ?? (envMaxRequests && !isNaN(envMaxRequests) ? envMaxRequests : 500);
 
     // Fresh isolated browser context for each job with mobile device emulation
     const mobileProfile = devices['Pixel 7'];
@@ -79,17 +80,11 @@ export class BrowserManager {
 
       // Route filtering: block media, fonts, images, trackers, websockets
       await page.route('**/*', async (route) => {
-        requestCount++;
-        if (requestCount > maxRequests) {
-          await route.abort('blockedbyclient');
-          return;
-        }
-
         const req = route.request();
         const resourceType = req.resourceType();
         const reqUrl = req.url();
 
-        // Block prohibited resource types
+        // Block prohibited resource types first (do NOT consume allowed request quota)
         if (['image', 'media', 'font', 'websocket', 'manifest', 'other'].includes(resourceType)) {
           await route.abort('blockedbyclient');
           return;
@@ -101,24 +96,44 @@ export class BrowserManager {
           return;
         }
 
+        requestCount++;
+        if (requestCount > maxRequests) {
+          await route.abort('blockedbyclient');
+          return;
+        }
+
         await route.continue();
       });
 
       this.logger.debug(`Navigating to URL: ${options.url}`);
 
-      // Navigate to URL
-      const response = await page.goto(options.url, {
-        waitUntil: 'domcontentloaded',
-        timeout: Math.min(timeoutMs, 30000)
-      });
+      // Navigate to URL with descriptive timeout
+      let response;
+      const navTimeout = Math.min(timeoutMs, 30000);
+      try {
+        response = await page.goto(options.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: navTimeout
+        });
+      } catch (navErr: any) {
+        const msg = navErr?.message || String(navErr);
+        if (msg.includes('Timeout') || msg.includes('timeout')) {
+          throw new Error(`TIMEOUT: Page navigation timed out after ${navTimeout}ms while loading ${options.url}`);
+        }
+        throw navErr;
+      }
 
       if (!response) {
-        throw new Error('UPSTREAM_ERROR: No response received from server');
+        throw new Error(`UPSTREAM_ERROR: No response received from server for ${options.url}`);
       }
 
       const status = response.status();
+      const finalUrl = page.url();
       if (status >= 400) {
-        throw new Error(`UPSTREAM_ERROR: HTTP server returned status ${status}`);
+        const pageTitle = await page.title().catch(() => '');
+        throw new Error(
+          `UPSTREAM_ERROR: HTTP server returned status ${status}${pageTitle ? ` ("${pageTitle.trim()}")` : ''} for ${options.url}${finalUrl !== options.url ? ` (redirected to ${finalUrl})` : ''}`
+        );
       }
 
       // Check Content-Type header on main document
@@ -129,7 +144,7 @@ export class BrowserManager {
                      contentType === '';
 
       if (!isHtml) {
-        throw new Error(`CONTENT_UNSUPPORTED: Unsupported document MIME type: ${contentType}`);
+        throw new Error(`CONTENT_UNSUPPORTED: Unsupported document MIME type: "${contentType}" for ${options.url} (expected HTML or plain text)`);
       }
 
       // Bounded wait for load state (up to 5 seconds extra, do not wait forever)
@@ -137,16 +152,26 @@ export class BrowserManager {
         this.logger.debug('Page load state timed out, proceeding with DOM content');
       });
 
-      const finalUrl = page.url();
+      const currentUrl = page.url();
       const rawHtml = await page.content();
-      const article = this.extractor.extract(rawHtml, finalUrl);
 
-      return {
-        article,
-        finalUrl,
-        title: article.title,
-        totalRequests: requestCount
-      };
+      try {
+        const article = this.extractor.extract(rawHtml, currentUrl);
+        return {
+          article,
+          finalUrl: currentUrl,
+          title: article.title,
+          totalRequests: requestCount
+        };
+      } catch (extractErr: any) {
+        if (extractErr instanceof ContentExtractionError && extractErr.diagnostics) {
+          extractErr.diagnostics.finalUrl = currentUrl;
+          extractErr.diagnostics.httpStatus = status;
+          extractErr.diagnostics.totalRequests = requestCount;
+          extractErr.message = `${extractErr.message} (finalUrl: ${currentUrl}, status: ${status}, requests: ${requestCount}${currentUrl !== options.url ? ', redirected: true' : ''})`;
+        }
+        throw extractErr;
+      }
     } finally {
       if (page) {
         await page.close().catch(() => {});

@@ -12,6 +12,14 @@ function parseSettingsMap(map) {
         }
         return undefined;
     };
+    let maxRequestsPerJob;
+    const maxReqRaw = getVal('MaxRequestsPerJob') ?? getVal('MaxRequests');
+    if (maxReqRaw !== undefined && maxReqRaw.trim().length > 0) {
+        const parsed = Number(maxReqRaw.trim());
+        if (!isNaN(parsed) && parsed > 0) {
+            maxRequestsPerJob = parsed;
+        }
+    }
     let adminId;
     const adminIdRaw = getVal('AdminID');
     if (adminIdRaw !== undefined && adminIdRaw.trim().length > 0) {
@@ -50,6 +58,7 @@ function parseSettingsMap(map) {
     return {
         adminId,
         errorListeners,
+        maxRequestsPerJob,
         raw
     };
 }

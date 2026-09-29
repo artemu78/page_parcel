@@ -81,7 +81,7 @@ It is **NOT** a proxy, VPN, interactive browser, screenshot engine, or general-p
   - Spammed `/read` requests overwhelming worker queues.
 * **Mitigations:**
   1. **Streaming Byte Budget:** Responses are inspected as a stream at the proxy layer. Single response limit: 5 MiB decoded. Aggregate job response limit: 20 MiB decoded. If exceeded, the connection is instantly aborted with an error.
-  2. **Bounded Request Count:** Maximum 100 HTTP resource requests per job.
+  2. **Bounded Request Count:** Default maximum 500 HTTP resource requests per job (configurable via `MAX_REQUESTS_PER_JOB` env var or dynamic `MaxRequestsPerJob` setting in YDB). Prohibited resource types (images, media, fonts, trackers) are aborted immediately without consuming the allowed request budget.
   3. **Strict Timeouts:**
      - Webhook acknowledgment deadline: < 3 seconds.
      - DNS resolution timeout: 3 seconds.

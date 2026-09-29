@@ -42,6 +42,7 @@ export interface JobQueueMessage {
 export interface AppSettings {
     adminId?: number;
     errorListeners: number[];
+    maxRequestsPerJob?: number;
     raw: Record<string, string>;
 }
 export declare function parseSettingsMap(map: Map<string, string> | Record<string, string>): AppSettings;

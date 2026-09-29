@@ -301,11 +301,12 @@ describe('Integration - Job Lifecycle and Recovery', () => {
     assert.equal(failedJob?.status, 'failed');
     assert.equal(failedJob?.failureCategory, 'SSRF_BLOCKED');
 
-    // Verify user received failure notification with job ID
+    // Verify user received failure notification with job ID and apology
     const failMsg = mockVk.sentMessages.find(m => m.peerId === 600);
     assert.ok(failMsg !== undefined);
     assert.ok(failMsg.message.includes(job.id));
     assert.ok(failMsg.message.includes('Адрес заблокирован'));
+    assert.ok(failMsg.message.includes('Извините нас, мы уже получили уведомление об ошибке и будем исправлять, мы вам сообщим'));
 
     await worker.close();
   });
