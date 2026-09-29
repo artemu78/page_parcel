@@ -232,7 +232,7 @@ resource "yandex_serverless_container" "worker" {
     url = "cr.yandex/${yandex_container_registry.registry.id}/worker:${var.worker_image_tag}"
     environment = {
       NODE_ENV                 = "production"
-      APP_VERSION              = "12"
+      APP_VERSION              = "13"
       WORKER_PORT              = "8080"
       YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path

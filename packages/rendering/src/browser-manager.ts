@@ -1,4 +1,4 @@
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Page, devices } from 'playwright';
 import { Logger, defaultLogger } from '@readable-web/observability';
 import { ContentExtractor, ExtractedArticle } from './extractor.js';
 
@@ -60,13 +60,13 @@ export class BrowserManager {
     const timeoutMs = options.timeoutMs ?? 45000;
     const maxRequests = options.maxRequests ?? 100;
 
-    // Fresh isolated browser context for each job
+    // Fresh isolated browser context for each job with mobile device emulation
+    const mobileProfile = devices['Pixel 7'];
     const context: BrowserContext = await browser.newContext({
+      ...mobileProfile,
       proxy: { server: options.egressProxyUrl },
       serviceWorkers: 'block',
       ignoreHTTPSErrors: false,
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 (ReadableWeb/1.0)',
-      viewport: { width: 1280, height: 800 },
       javaScriptEnabled: true
     });
 

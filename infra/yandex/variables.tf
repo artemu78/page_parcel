@@ -29,7 +29,7 @@ variable "webhook_image_tag" {
 variable "worker_image_tag" {
   type        = string
   description = "Container image tag for worker"
-  default     = "v12"
+  default     = "v13"
 }
 
 variable "service_account_key_file" {
