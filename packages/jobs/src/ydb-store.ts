@@ -1,4 +1,4 @@
-import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX } from 'ydb-sdk';
+import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX, TableDescription, Column, Types } from 'ydb-sdk';
 import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
 import { JobStore, RateLimitResult } from './store.js';
 
@@ -38,43 +38,58 @@ export class YdbJobStore implements JobStore {
     // Non-blocking warmup
     this.driver.ready(5000).catch(() => {});
 
-    // Best-effort auto-creation of Settings, Users, and Roles tables
-    this.driver.tableClient.withSession(async (session) => {
-      await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Settings\` (
-          key Utf8,
-          value Utf8,
-          PRIMARY KEY (key)
-        );
-      `);
+    // Best-effort auto-creation of Settings, Users, and Roles tables using DDL TableDescription
+    try {
+      await this.driver.tableClient.withSession(async (session) => {
+        // 1. Settings table
+        try {
+          const settingsDesc = new TableDescription()
+            .withColumn(new Column('key', Types.optional(Types.UTF8)))
+            .withColumn(new Column('value', Types.optional(Types.UTF8)))
+            .withPrimaryKey('key');
+          await session.createTable('Settings', settingsDesc);
+        } catch {
+          // Table already exists or creation restricted
+        }
 
-      await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Users\` (
-          ID Int64,
-          CreatedAt Timestamp,
-          LastAccess Timestamp,
-          RequestsCount Int64,
-          Status Int32,
-          ProfileLink Utf8,
-          PRIMARY KEY (ID)
-        );
-      `);
+        // 2. Users table
+        try {
+          const usersDesc = new TableDescription()
+            .withColumn(new Column('ID', Types.optional(Types.INT64)))
+            .withColumn(new Column('CreatedAt', Types.optional(Types.TIMESTAMP)))
+            .withColumn(new Column('LastAccess', Types.optional(Types.TIMESTAMP)))
+            .withColumn(new Column('RequestsCount', Types.optional(Types.INT64)))
+            .withColumn(new Column('Status', Types.optional(Types.INT32)))
+            .withColumn(new Column('ProfileLink', Types.optional(Types.UTF8)))
+            .withPrimaryKey('ID');
+          await session.createTable('Users', usersDesc);
+        } catch {
+          // Table already exists or creation restricted
+        }
 
-      await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Roles\` (
-          User Int64,
-          Role Int32,
-          PRIMARY KEY (User, Role)
-        );
-      `);
+        // 3. Roles table
+        try {
+          const rolesDesc = new TableDescription()
+            .withColumn(new Column('User', Types.optional(Types.INT64)))
+            .withColumn(new Column('Role', Types.optional(Types.INT32)))
+            .withPrimaryKeys('User', 'Role');
+          await session.createTable('Roles', rolesDesc);
+        } catch {
+          // Table already exists or creation restricted
+        }
 
-      // Delete deprecated ErrorListeners and Admin records from Settings table
-      await session.executeQuery(`
-        DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
-      `);
-    }).catch(() => {
-      // In case table creation is restricted or already exists
-    });
+        // Delete deprecated ErrorListeners and Admin records from Settings table (DML data query)
+        try {
+          await session.executeQuery(`
+            DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
+          `);
+        } catch {
+          // Ignored if Settings table is not ready yet
+        }
+      });
+    } catch {
+      // In case session acquisition fails
+    }
   }
 
   public async destroy(): Promise<void> {

@@ -31,40 +31,60 @@ class YdbJobStore {
     async init() {
         // Non-blocking warmup
         this.driver.ready(5000).catch(() => { });
-        // Best-effort auto-creation of Settings, Users, and Roles tables
-        this.driver.tableClient.withSession(async (session) => {
-            await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Settings\` (
-          key Utf8,
-          value Utf8,
-          PRIMARY KEY (key)
-        );
-      `);
-            await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Users\` (
-          ID Int64,
-          CreatedAt Timestamp,
-          LastAccess Timestamp,
-          RequestsCount Int64,
-          Status Int32,
-          ProfileLink Utf8,
-          PRIMARY KEY (ID)
-        );
-      `);
-            await session.executeQuery(`
-        CREATE TABLE IF NOT EXISTS \`Roles\` (
-          User Int64,
-          Role Int32,
-          PRIMARY KEY (User, Role)
-        );
-      `);
-            // Delete deprecated ErrorListeners and Admin records from Settings table
-            await session.executeQuery(`
-        DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
-      `);
-        }).catch(() => {
-            // In case table creation is restricted or already exists
-        });
+        // Best-effort auto-creation of Settings, Users, and Roles tables using DDL TableDescription
+        try {
+            await this.driver.tableClient.withSession(async (session) => {
+                // 1. Settings table
+                try {
+                    const settingsDesc = new ydb_sdk_1.TableDescription()
+                        .withColumn(new ydb_sdk_1.Column('key', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.UTF8)))
+                        .withColumn(new ydb_sdk_1.Column('value', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.UTF8)))
+                        .withPrimaryKey('key');
+                    await session.createTable('Settings', settingsDesc);
+                }
+                catch {
+                    // Table already exists or creation restricted
+                }
+                // 2. Users table
+                try {
+                    const usersDesc = new ydb_sdk_1.TableDescription()
+                        .withColumn(new ydb_sdk_1.Column('ID', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.INT64)))
+                        .withColumn(new ydb_sdk_1.Column('CreatedAt', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.TIMESTAMP)))
+                        .withColumn(new ydb_sdk_1.Column('LastAccess', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.TIMESTAMP)))
+                        .withColumn(new ydb_sdk_1.Column('RequestsCount', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.INT64)))
+                        .withColumn(new ydb_sdk_1.Column('Status', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.INT32)))
+                        .withColumn(new ydb_sdk_1.Column('ProfileLink', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.UTF8)))
+                        .withPrimaryKey('ID');
+                    await session.createTable('Users', usersDesc);
+                }
+                catch {
+                    // Table already exists or creation restricted
+                }
+                // 3. Roles table
+                try {
+                    const rolesDesc = new ydb_sdk_1.TableDescription()
+                        .withColumn(new ydb_sdk_1.Column('User', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.INT64)))
+                        .withColumn(new ydb_sdk_1.Column('Role', ydb_sdk_1.Types.optional(ydb_sdk_1.Types.INT32)))
+                        .withPrimaryKeys('User', 'Role');
+                    await session.createTable('Roles', rolesDesc);
+                }
+                catch {
+                    // Table already exists or creation restricted
+                }
+                // Delete deprecated ErrorListeners and Admin records from Settings table (DML data query)
+                try {
+                    await session.executeQuery(`
+            DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
+          `);
+                }
+                catch {
+                    // Ignored if Settings table is not ready yet
+                }
+            });
+        }
+        catch {
+            // In case session acquisition fails
+        }
     }
     async destroy() {
         if (this.isOwnedDriver) {
