@@ -61,7 +61,7 @@
 ### 3.2 VK Community Access Token (`VK_GROUP_TOKEN`)
 1. In VK Community settings, create a new access token with `messages` and `docs` permissions.
 2. Add new version in Yandex Lockbox.
-3. Deploy new revisions of the worker container.
+3. Apply Terraform to deploy new revisions of both the webhook and worker containers: both receive `VK_GROUP_TOKEN` from the current Lockbox version. Confirm both revisions use the new token before revoking the old one.
 4. Revoke the old token in VK settings.
 
 ---
