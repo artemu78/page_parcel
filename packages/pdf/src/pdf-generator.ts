@@ -140,15 +140,15 @@ export class PdfGenerator {
       };
     } finally {
       if (page) {
-        await page.close().catch(() => {});
+        await page.close().catch(err => { this.logger.exception(err, 'Close PDF browser resources'); });
       }
-      await context.close().catch(() => {});
+      await context.close().catch(err => { this.logger.exception(err, 'Close PDF browser resources'); });
     }
   }
 
   public async close(): Promise<void> {
     if (this.browser) {
-      await this.browser.close().catch(() => {});
+      await this.browser.close().catch(err => { this.logger.exception(err, 'Close PDF browser resources'); });
       this.browser = null;
     }
   }

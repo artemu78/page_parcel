@@ -169,6 +169,7 @@ resource "yandex_serverless_container" "webhook" {
     environment = {
       NODE_ENV                 = "production"
       APP_VERSION              = var.app_version
+      GITHUB_REPOSITORY        = var.github_repository
       VK_GROUP_ID              = tostring(var.vk_group_id)
       YMQ_QUEUE_URL            = yandex_message_queue.jobs_queue.id
       YMQ_ACCESS_KEY           = yandex_iam_service_account_static_access_key.ymq_key.access_key
@@ -196,6 +197,13 @@ resource "yandex_serverless_container" "webhook" {
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
     version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
+    key                  = "github_token"
+    environment_variable = "GITHUB_TOKEN"
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "vk_group_token"
     environment_variable = "VK_GROUP_TOKEN"
   }
@@ -205,6 +213,13 @@ resource "yandex_serverless_container" "webhook" {
     version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "openrouter_api_key"
     environment_variable = "OPENROUTER_API_KEY"
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
+    key                  = "serper_api_key"
+    environment_variable = "SERPER_API_KEY"
   }
 
   depends_on = [
@@ -240,12 +255,20 @@ resource "yandex_serverless_container" "worker" {
     environment = {
       NODE_ENV                 = "production"
       APP_VERSION              = var.app_version
+      GITHUB_REPOSITORY        = var.github_repository
       WORKER_PORT              = "8080"
       PDF_FORMAT               = "mobile"
       YDB_ENDPOINT             = yandex_ydb_database_serverless.db.ydb_api_endpoint
       YDB_DATABASE             = yandex_ydb_database_serverless.db.database_path
       YDB_METADATA_CREDENTIALS = "1"
     }
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
+    key                  = "github_token"
+    environment_variable = "GITHUB_TOKEN"
   }
 
   secrets {

@@ -19,6 +19,9 @@ ENV PORT=8080
 ENV WORKER_PORT=8080
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# Configure apt retries to handle transient network drops
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
+
 # Install Chromium dependencies, certificates, and Cyrillic/Latin fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -28,14 +31,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnspr4 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
+    libatspi2.0-0 \
     libcups2 \
+    libdbus-1-3 \
     libdrm2 \
-    libxkbcommon0 \
+    libgbm1 \
+    libglib2.0-0 \
+    libx11-6 \
+    libxcb1 \
     libxcomposite1 \
     libxdamage1 \
+    libxext6 \
     libxfixes3 \
+    libxkbcommon0 \
     libxrandr2 \
-    libgbm1 \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
@@ -51,9 +60,9 @@ COPY package*.json ./
 COPY --from=builder --chown=pwuser:pwuser /app/packages/ ./packages/
 COPY --from=builder --chown=pwuser:pwuser /app/apps/ ./apps/
 
-# Install dependencies and download Chromium binary
+# Install dependencies and download Chromium binary (without pulling redundant X11/xvfb tools via apt)
 RUN npm ci --omit=dev --ignore-scripts && \
-    npx playwright install --with-deps chromium && \
+    npx playwright install chromium && \
     chown -R pwuser:pwuser /ms-playwright
 
 USER pwuser

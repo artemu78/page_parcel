@@ -200,12 +200,12 @@ export class ValidatingEgressProxy {
     });
 
     upstreamSocket.on('error', (err) => {
-      this.logger.debug(`Upstream socket error: ${err.message}`);
+      this.logger.exception(err, 'Proxy upstream socket');
       clientSocket.destroy();
     });
 
     clientSocket.on('error', (err) => {
-      this.logger.debug(`Client socket error: ${err.message}`);
+      this.logger.exception(err, 'Proxy client socket');
       upstreamSocket.destroy();
     });
 
@@ -285,6 +285,7 @@ export class ValidatingEgressProxy {
         timeout: 10000
       },
       (upstreamRes) => {
+        this.logger.info('Article proxy HTTP response', { httpStatus: upstreamRes.statusCode });
         // Forward headers
         res.writeHead(upstreamRes.statusCode || 200, upstreamRes.headers);
 
@@ -312,7 +313,7 @@ export class ValidatingEgressProxy {
     });
 
     upstreamReq.on('error', (err) => {
-      this.logger.warn(`Upstream HTTP request failed: ${err.message}`);
+      this.logger.exception(err, 'Proxy upstream request');
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'text/plain' });
         res.end('Bad Gateway');

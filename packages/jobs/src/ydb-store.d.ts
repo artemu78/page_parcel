@@ -1,3 +1,5 @@
+import { YdbSearchStore } from './search-store.js';
+import { YdbExceptionOutbox } from './exception-outbox.js';
 import { Driver } from 'ydb-sdk';
 import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, UserRecord } from './types.js';
 import { JobStore, RateLimitResult } from './store.js';
@@ -14,6 +16,8 @@ export declare class YdbJobStore implements JobStore {
     private roleUsersCache;
     private roleUsersCacheTtlMs;
     constructor(options: YdbJobStoreOptions);
+    searchStore(): YdbSearchStore;
+    exceptionOutbox(): YdbExceptionOutbox;
     init(): Promise<void>;
     destroy(): Promise<void>;
     createJobIfNotExist(params: CreateJobParams): Promise<{

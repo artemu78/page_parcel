@@ -106,7 +106,7 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
     });
 });
 (0, node_test_1.describe)('Role 3 AI Chat in WebhookHandler', () => {
-    (0, node_test_1.it)('forwards message from role 3 user without command to OpenRouter and replies in VK', async () => {
+    (0, node_test_1.it)('searches free text for role 3 users instead of sending it to OpenRouter', async () => {
         const store = new index_js_1.MemoryJobStore();
         const queue = new index_js_1.MemoryQueueClient();
         const outbox = new index_js_1.OutboxService({ jobStore: store, queueClient: queue });
@@ -131,6 +131,7 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
             outboxService: outbox,
             vkClient: mockVk,
             openRouterClient: mockOpenRouter,
+            searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
             validationOptions: {
                 expectedGroupId: 12345,
                 expectedSecret: 'sec',
@@ -161,12 +162,12 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
         // Wait microtask for async message handling
         await new Promise((r) => setTimeout(r, 50));
         // Verify OpenRouter was called with model from Settings
-        strict_1.default.equal(openRouterCalled, true);
-        strict_1.default.equal(modelUsed, 'custom/fast-llm');
+        strict_1.default.equal(openRouterCalled, false);
+        strict_1.default.equal(modelUsed, undefined);
         // Verify VK reply was sent to the user
-        strict_1.default.equal(sentReplies.length, 1);
+        strict_1.default.equal(sentReplies.length, 2);
         strict_1.default.equal(sentReplies[0].peerId, role3UserId);
-        strict_1.default.ok(sentReplies[0].message.includes('Какая сегодня погода?'));
+        strict_1.default.ok(sentReplies[1].message.includes('https://example.org/weather'));
     });
     (0, node_test_1.it)('does NOT send message to OpenRouter if user does not have Role 3', async () => {
         const store = new index_js_1.MemoryJobStore();
@@ -191,6 +192,7 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
             outboxService: outbox,
             vkClient: mockVk,
             openRouterClient: mockOpenRouter,
+            searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
             validationOptions: {
                 expectedGroupId: 12345,
                 expectedSecret: 'sec',
@@ -215,8 +217,8 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
         await webhook.handleRequest(messageEvent);
         await new Promise((r) => setTimeout(r, 50));
         strict_1.default.equal(openRouterCalled, false);
-        strict_1.default.equal(sentReplies.length, 1);
-        strict_1.default.ok(sentReplies[0].message.includes('Неизвестная команда'));
+        strict_1.default.equal(sentReplies.length, 2);
+        strict_1.default.ok(sentReplies[1].message.includes('https://example.org/weather'));
     });
     (0, node_test_1.it)('executes normal command even if user has Role 3', async () => {
         const store = new index_js_1.MemoryJobStore();
@@ -241,6 +243,7 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
             outboxService: outbox,
             vkClient: mockVk,
             openRouterClient: mockOpenRouter,
+            searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
             validationOptions: {
                 expectedGroupId: 12345,
                 expectedSecret: 'sec',

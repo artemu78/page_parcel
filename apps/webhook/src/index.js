@@ -7,6 +7,8 @@ const handler_js_1 = require("./handler.js");
 const server_js_1 = require("./server.js");
 const openrouter_js_1 = require("./openrouter.js");
 async function bootstrap() {
+    (0, observability_1.configureExceptionReporting)('webhook');
+    (0, observability_1.installRuntimeExceptionHandlers)('webhook');
     const logger = observability_1.defaultLogger.child({ service: 'webhook' });
     const groupId = Number.parseInt(process.env.VK_GROUP_ID || '0', 10);
     const secret = process.env.VK_SECRET || '';
@@ -17,15 +19,22 @@ async function bootstrap() {
     const ydbEndpoint = process.env.YDB_ENDPOINT;
     const ydbDatabase = process.env.YDB_DATABASE;
     let jobStore;
+    let searchStore;
     if (ydbEndpoint && ydbDatabase) {
         logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
         const ydbStore = new jobs_1.YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+        const exceptionOutbox = ydbStore.exceptionOutbox();
+        await exceptionOutbox.init();
+        (0, observability_1.configureExceptionReporting)('webhook', exceptionOutbox);
         await ydbStore.init();
+        searchStore = ydbStore.searchStore();
+        await searchStore.init();
         jobStore = ydbStore;
     }
     else {
         logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
         jobStore = new jobs_1.MemoryJobStore();
+        searchStore = new jobs_1.MemorySearchStore();
     }
     const ymqAccessKey = process.env.YMQ_ACCESS_KEY;
     const ymqSecretKey = process.env.YMQ_SECRET_KEY;
@@ -60,11 +69,12 @@ async function bootstrap() {
         logger.info('OpenRouter client initialized');
     }
     else {
-        logger.warn('OPENROUTER_API_KEY not configured; Role 3 chat will not be available');
+        logger.warn('OPENROUTER_API_KEY not configured; optional OpenRouter client unavailable');
     }
     const handler = new handler_js_1.WebhookHandler({
         jobStore,
         outboxService,
+        searchStore,
         vkClient,
         openRouterClient,
         validationOptions: {
@@ -82,13 +92,15 @@ async function bootstrap() {
     const shutdown = async (signal) => {
         logger.info(`Received ${signal}, shutting down Webhook Server...`);
         await server.stop();
+        await (0, observability_1.flushExceptionReports)();
         process.exit(0);
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 }
-bootstrap().catch((err) => {
-    observability_1.defaultLogger.error(`Fatal webhook startup error: ${err.message}`);
+bootstrap().catch(async (err) => {
+    observability_1.defaultLogger.child({ service: 'webhook' }).exception(err, 'Startup failure');
+    await (0, observability_1.flushExceptionReports)();
     process.exit(1);
 });
 //# sourceMappingURL=index.js.map

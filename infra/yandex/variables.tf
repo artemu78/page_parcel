@@ -45,3 +45,13 @@ variable "app_version" {
 }
 
 
+
+variable "github_repository" {
+  type        = string
+  description = "Repository receiving runtime bug issues (owner/repository)"
+  default     = "artemu78/page_parcel"
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must be owner/repository."
+  }
+}

@@ -60,7 +60,8 @@ export class JobProcessor {
           maxRequests = settings.maxRequestsPerJob;
         }
       }
-    } catch {
+    } catch (err) {
+      this.logger.exception(err, 'Read job settings');
       // Best effort setting resolution
     }
 
@@ -114,7 +115,8 @@ export class JobProcessor {
               resolvedFormat = settings.pdfFormat.toLowerCase() as PdfFormat;
             }
           }
-        } catch {
+        } catch (err) {
+          this.logger.exception(err, 'Read PDF settings');
           // Best effort setting resolution
         }
 
@@ -155,7 +157,7 @@ export class JobProcessor {
         if (job.submittedUrl) {
           try {
             sourceHost = new URL(job.submittedUrl).hostname;
-          } catch {}
+          } catch (err) { this.logger.exception(err, 'Resolve source hostname', { jobId: job.id }); }
         }
       }
 
@@ -185,13 +187,13 @@ export class JobProcessor {
       return { success: true, retryable: false };
     } catch (err) {
       const errorMsg = (err as Error).message || String(err);
-      this.logger.error(`Error processing job ${job.id}: ${errorMsg}`);
+      this.logger.exception(err, 'Process job', { jobId: job.id, attempts: job.attempts });
       const article = (err as any)?.article;
       const diagnostics = (err as any)?.diagnostics;
 
       // Send error details to configured ErrorListeners
       await this.notifyErrorListeners(job, errorMsg, article, diagnostics).catch((listenerErr) => {
-        this.logger.warn(`Failed to notify error listeners for job ${job.id}: ${(listenerErr as Error).message}`);
+        this.logger.exception(listenerErr, 'Failed to notify error listeners for job');
       });
 
       const { category, isTerminal, userMessage } = this.classifyError(errorMsg, job);
@@ -213,7 +215,7 @@ export class JobProcessor {
         return { success: false, retryable: true }; // Retryable failure: YMQ will retry
       }
     } finally {
-      await proxy.stop().catch(() => {});
+      await proxy.stop().catch(err => { this.logger.exception(err, 'Close worker resources'); });
     }
   }
 
@@ -301,7 +303,7 @@ export class JobProcessor {
         randomId
       });
     } catch (err) {
-      this.logger.warn(`Failed to send failure notification for job ${job.id}: ${(err as Error).message}`);
+      this.logger.exception(err, 'Failed to send failure notification for job');
     }
   }
 
@@ -319,7 +321,7 @@ export class JobProcessor {
         errorListeners = await this.jobStore.getUsersByRole(2);
       }
     } catch (err) {
-      this.logger.warn(`Failed to fetch error listeners (role 2) from job store: ${(err as Error).message}`);
+      this.logger.exception(err, 'Failed to fetch error listeners (role 2) from job store');
       return;
     }
 
@@ -372,7 +374,7 @@ export class JobProcessor {
         });
         this.logger.info(`Sent error log for job ${job.id} to error listener ${listenerId}`);
       } catch (sendErr) {
-        this.logger.warn(`Failed to send error log for job ${job.id} to listener ${listenerId}: ${(sendErr as Error).message}`);
+        this.logger.exception(sendErr, 'Send error listener notification');
       }
     }
   }
@@ -386,13 +388,14 @@ export class JobProcessor {
         return str.slice(0, 2500) + `\n... [обрезано, полная длина: ${str.length}]`;
       }
       return str;
-    } catch {
+    } catch (err) {
+      this.logger.exception(err, 'Format extraction diagnostic');
       return String(article);
     }
   }
 
   public async close(): Promise<void> {
-    await this.browserManager.close().catch(() => {});
-    await this.pdfGenerator.close().catch(() => {});
+    await this.browserManager.close().catch(err => { this.logger.exception(err, 'Close worker resources'); });
+    await this.pdfGenerator.close().catch(err => { this.logger.exception(err, 'Close worker resources'); });
   }
 }

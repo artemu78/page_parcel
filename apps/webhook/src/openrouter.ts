@@ -2,7 +2,7 @@ import https from 'node:https';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { Logger, defaultLogger, redactSensitiveData } from '@readable-web/observability';
+import { Logger, defaultLogger, redactSensitiveData, UpstreamResponseError } from '@readable-web/observability';
 
 export interface OpenRouterClientOptions {
   apiKey: string;
@@ -83,6 +83,7 @@ export class OpenRouterClient {
           timeout: this.timeoutMs
         },
         (res) => {
+          this.logger.info('OpenRouter HTTP response', { httpStatus: res.statusCode });
           let data = '';
           res.setEncoding('utf8');
 
@@ -92,19 +93,18 @@ export class OpenRouterClient {
 
           res.on('end', () => {
             if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-              this.logger.error(`OpenRouter HTTP ${res.statusCode}: ${data.slice(0, 300)}`);
-              return reject(new Error(`OpenRouter API error (HTTP ${res.statusCode}): ${data.slice(0, 200)}`));
+              return reject(new UpstreamResponseError(`OpenRouter API error (HTTP ${res.statusCode})`, 'OpenRouter', res.statusCode));
             }
 
             try {
               const json = JSON.parse(data);
               const content = json.choices?.[0]?.message?.content;
               if (typeof content !== 'string') {
-                return reject(new Error('OpenRouter response did not contain message content'));
+                return reject(new UpstreamResponseError('OpenRouter response did not contain message content', 'OpenRouter', res.statusCode ?? 200));
               }
               resolve(content.trim());
             } catch (err) {
-              reject(new Error(`Failed to parse OpenRouter response: ${(err as Error).message}`));
+              reject(new UpstreamResponseError('Failed to parse OpenRouter response', 'OpenRouter', res.statusCode ?? 200));
             }
           });
         }
@@ -115,7 +115,7 @@ export class OpenRouterClient {
       });
 
       req.on('error', (err) => {
-        this.logger.error(`OpenRouter request error: ${redactSensitiveData(err.message)}`);
+        this.logger.exception(err, 'OpenRouter network request');
         reject(err);
       });
 

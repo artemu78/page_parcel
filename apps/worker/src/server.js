@@ -107,7 +107,16 @@ class WorkerServer {
             req.on('end', async () => {
                 try {
                     const bodyStr = Buffer.concat(chunks).toString('utf-8');
-                    const bodyJson = JSON.parse(bodyStr);
+                    let bodyJson;
+                    try {
+                        bodyJson = JSON.parse(bodyStr);
+                    }
+                    catch {
+                        this.logger.warn('Invalid request JSON');
+                        res.writeHead(400, { 'Content-Type': 'text/plain' });
+                        res.end('Bad Request');
+                        return;
+                    }
                     this.logger.info(`Received trigger payload: ${bodyStr.slice(0, 500)}`);
                     let jobIds = [];
                     // 1. Check messages array (standard YMQ trigger)
@@ -166,6 +175,7 @@ class WorkerServer {
                             hasRetryableFailure = true;
                         }
                     }
+                    await (0, observability_1.flushExceptionReports)();
                     if (hasRetryableFailure) {
                         // Return 500 so YMQ trigger does NOT ack and retries after visibility timeout
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -178,7 +188,8 @@ class WorkerServer {
                     }
                 }
                 catch (err) {
-                    this.logger.error(`Error processing trigger payload: ${err.message}`);
+                    this.logger.exception(err, 'Error processing trigger payload');
+                    await (0, observability_1.flushExceptionReports)();
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
                     res.end('Internal Server Error');
                 }

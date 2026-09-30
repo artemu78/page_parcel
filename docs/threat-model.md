@@ -124,3 +124,25 @@ It is **NOT** a proxy, VPN, interactive browser, screenshot engine, or general-p
   2. **Short TTL:** Job metadata in YDB has a strict 24-hour TTL.
   3. **No Query String Logging:** URLs in logs are redacted to hostnames or replaced by opaque Job IDs.
   4. **Clarified Boundaries:** Users are informed that PDFs delivered to VK are subject to VK's document storage policies.
+
+## Runtime bug-report boundary
+
+GitHub is an additional external sink. Runtime reports exclude exception messages,
+private request/response payloads, URLs, user identity, and arbitrary context. Only
+fixed operation names, safe correlation fields, timestamps, and code locations are
+exported. The Lockbox GitHub token is restricted to issue access in the configured
+repository; redirects from GitHub requests are rejected. Reporting failures must
+not recurse into bug reporting. Public repositories make these reports public, and
+GitHub retention is independent of job-data TTL. Durable outbox records contain the
+same sanitized body; see [delivery limits](operations.md#6-github-runtime-bug-reporting).
+
+## Search boundary
+
+Free-text queries are sent to Serper and stored with result snippets in YDB
+for 24 hours. Do not log queries or export them to GitHub reporting. The provider
+endpoint is fixed; redirects are rejected, responses are bounded to one MiB and
+eight seconds. Responses are parsed as JSON. Unsafe result links are
+omitted; selection uses the full existing safe PDF fetch path. Pagination checks
+owner, peer and age. Separate serializable admission prevents concurrent searches
+from bypassing the 30-second limit. Provider quotas, credit exhaustion and service availability remain operational
+risks. The API key is read from the environment/Lockbox and is never logged.

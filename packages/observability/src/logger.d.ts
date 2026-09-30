@@ -17,6 +17,7 @@ export declare class Logger {
     child(context: LogContext): Logger;
     private shouldLog;
     private log;
+    exception(error: unknown, operation: string, context?: LogContext): void;
     debug(message: string, context?: LogContext): void;
     info(message: string, context?: LogContext): void;
     warn(message: string, context?: LogContext): void;

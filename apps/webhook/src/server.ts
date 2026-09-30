@@ -89,20 +89,28 @@ export class WebhookServer {
       req.on('end', async () => {
         try {
           const bodyStr = Buffer.concat(chunks).toString('utf-8');
-          const bodyJson = JSON.parse(bodyStr);
+          let bodyJson;
+          try {
+            bodyJson = JSON.parse(bodyStr);
+          } catch {
+            this.logger.warn('Invalid request JSON');
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Bad Request');
+            return;
+          }
 
           const result = await this.handler.handleRequest(bodyJson);
           res.writeHead(result.statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(result.body);
         } catch (err) {
-          this.logger.error(`Error processing webhook request: ${(err as Error).message}`);
+          this.logger.exception(err, 'Error processing webhook request');
           res.writeHead(400, { 'Content-Type': 'text/plain' });
           res.end('Bad Request');
         }
       });
 
       req.on('error', (err) => {
-        this.logger.error(`Incoming connection error: ${err.message}`);
+        this.logger.exception(err, 'Incoming connection');
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end('Internal Server Error');
       });

@@ -6,6 +6,8 @@ const jobs_1 = require("@readable-web/jobs");
 const job_processor_js_1 = require("./job-processor.js");
 const server_js_1 = require("./server.js");
 async function bootstrap() {
+    (0, observability_1.configureExceptionReporting)('worker');
+    (0, observability_1.installRuntimeExceptionHandlers)('worker');
     const logger = observability_1.defaultLogger.child({ service: 'worker' });
     const vkToken = process.env.VK_GROUP_TOKEN || '';
     const triggerSecret = process.env.TRIGGER_SECRET;
@@ -15,6 +17,9 @@ async function bootstrap() {
     if (ydbEndpoint && ydbDatabase) {
         logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
         const ydbStore = new jobs_1.YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+        const exceptionOutbox = ydbStore.exceptionOutbox();
+        await exceptionOutbox.init();
+        (0, observability_1.configureExceptionReporting)('worker', exceptionOutbox);
         await ydbStore.init();
         jobStore = ydbStore;
     }
@@ -38,13 +43,15 @@ async function bootstrap() {
         logger.info(`Received ${signal}, shutting down Worker Server...`);
         await server.stop();
         await processor.close();
+        await (0, observability_1.flushExceptionReports)();
         process.exit(0);
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 }
-bootstrap().catch((err) => {
-    observability_1.defaultLogger.error(`Fatal worker startup error: ${err.message}`);
+bootstrap().catch(async (err) => {
+    observability_1.defaultLogger.child({ service: 'worker' }).exception(err, 'Startup failure');
+    await (0, observability_1.flushExceptionReports)();
     process.exit(1);
 });
 //# sourceMappingURL=index.js.map

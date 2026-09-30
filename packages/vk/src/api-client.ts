@@ -1,4 +1,4 @@
-import { Logger, defaultLogger, redactSensitiveData } from '@readable-web/observability';
+import { Logger, defaultLogger, redactSensitiveData, UpstreamResponseError } from '@readable-web/observability';
 import { VkApiResponse, VkUploadServerResponse, VkSaveDocResponse } from './types.js';
 
 export interface VkClientOptions {
@@ -8,10 +8,10 @@ export interface VkClientOptions {
   baseUrl?: string;
 }
 
-export class VkApiError extends Error {
+export class VkApiError extends UpstreamResponseError {
   public errorCode: number;
   constructor(message: string, errorCode: number) {
-    super(redactSensitiveData(message));
+    super(redactSensitiveData(message), 'VK', 200);
     this.name = 'VkApiError';
     this.errorCode = errorCode;
   }
@@ -53,19 +53,23 @@ export class VkApiClient {
       throw new Error(`VK API network error on ${method}: ${redactSensitiveData((err as Error).message)}`);
     }
 
+    this.logger.info('VK HTTP response', { httpStatus: res.status });
     if (!res.ok) {
-      throw new Error(`VK API HTTP error on ${method}: ${res.status} ${res.statusText}`);
+      throw new UpstreamResponseError(`VK API HTTP error on ${method}: ${res.status}`, 'VK', res.status);
     }
 
-    const data = (await res.json()) as VkApiResponse<T>;
+    let data: VkApiResponse<T>;
+    try { data = await res.json() as VkApiResponse<T>; } catch {
+      throw new UpstreamResponseError('VK API returned invalid JSON', 'VK', res.status);
+    }
 
-    if (data.error) {
-      this.logger.error(`VK API error on ${method}: [${data.error.error_code}] ${data.error.error_msg}`);
+    if (data?.error) {
+      this.logger.info('VK API response error', { method, apiCode: data.error.error_code });
       throw new VkApiError(data.error.error_msg, data.error.error_code);
     }
 
-    if (data.response === undefined) {
-      throw new Error(`VK API returned empty response object on ${method}`);
+    if (data?.response === undefined) {
+      throw new UpstreamResponseError(`VK API returned empty response object on ${method}`, 'VK', res.status);
     }
 
     return data.response;
@@ -99,15 +103,18 @@ export class VkApiClient {
       throw new Error(`Failed to upload PDF to VK: ${redactSensitiveData((err as Error).message)}`);
     }
 
+    this.logger.info('VK HTTP response', { httpStatus: res.status });
     if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      this.logger.error(`VK upload server HTTP error: ${res.status} ${res.statusText} on ${targetUrl}. Response: ${errBody.slice(0, 500)}`);
-      throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText} - ${errBody.slice(0, 200)}`);
+      await res.body?.cancel();
+      throw new UpstreamResponseError(`VK upload server HTTP error: ${res.status}`, 'VK upload', res.status);
     }
 
-    const json = (await res.json()) as { file?: string; error?: string };
-    if (!json.file) {
-      throw new Error(`VK upload server response missing file field: ${JSON.stringify(json)}`);
+    let json: { file?: string; error?: string };
+    try { json = await res.json() as typeof json; } catch {
+      throw new UpstreamResponseError('VK upload server returned invalid JSON', 'VK upload', res.status);
+    }
+    if (!json?.file) {
+      throw new UpstreamResponseError('VK upload server response missing file field', 'VK upload', res.status);
     }
 
     return json.file;
@@ -145,7 +152,7 @@ export class VkApiClient {
       return await this.callMethod<number>('messages.send', callParams);
     } catch (err) {
       if (params.keyboard && err instanceof VkApiError && err.errorCode === 912) {
-        this.logger.warn(
+        this.logger.info(
           `VK bot capabilities disabled in community settings (error 912). Falling back to sending message without keyboard.`
         );
         const { keyboard: _, ...fallbackParams } = callParams;

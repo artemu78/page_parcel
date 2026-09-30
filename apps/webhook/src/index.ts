@@ -1,11 +1,13 @@
-import { defaultLogger } from '@readable-web/observability';
+import { defaultLogger, configureExceptionReporting, installRuntimeExceptionHandlers, flushExceptionReports } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
-import { MemoryJobStore, YdbJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
+import { MemorySearchStore, MemoryJobStore, YdbJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
 import { WebhookHandler } from './handler.js';
 import { WebhookServer } from './server.js';
 import { OpenRouterClient } from './openrouter.js';
 
 async function bootstrap() {
+  configureExceptionReporting('webhook');
+  installRuntimeExceptionHandlers('webhook');
   const logger = defaultLogger.child({ service: 'webhook' });
 
   const groupId = Number.parseInt(process.env.VK_GROUP_ID || '0', 10);
@@ -18,14 +20,21 @@ async function bootstrap() {
   const ydbDatabase = process.env.YDB_DATABASE;
 
   let jobStore;
+  let searchStore;
   if (ydbEndpoint && ydbDatabase) {
     logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
     const ydbStore = new YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+    const exceptionOutbox = ydbStore.exceptionOutbox();
+    await exceptionOutbox.init();
+    configureExceptionReporting('webhook', exceptionOutbox);
     await ydbStore.init();
+    searchStore = ydbStore.searchStore();
+    await searchStore.init();
     jobStore = ydbStore;
   } else {
     logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
     jobStore = new MemoryJobStore();
+    searchStore = new MemorySearchStore();
   }
 
   const ymqAccessKey = process.env.YMQ_ACCESS_KEY;
@@ -64,12 +73,13 @@ async function bootstrap() {
   if (openRouterClient) {
     logger.info('OpenRouter client initialized');
   } else {
-    logger.warn('OPENROUTER_API_KEY not configured; Role 3 chat will not be available');
+    logger.warn('OPENROUTER_API_KEY not configured; optional OpenRouter client unavailable');
   }
 
   const handler = new WebhookHandler({
     jobStore,
     outboxService,
+    searchStore,
     vkClient,
     openRouterClient,
     validationOptions: {
@@ -90,6 +100,7 @@ async function bootstrap() {
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down Webhook Server...`);
     await server.stop();
+    await flushExceptionReports();
     process.exit(0);
   };
 
@@ -97,7 +108,8 @@ async function bootstrap() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-bootstrap().catch((err) => {
-  defaultLogger.error(`Fatal webhook startup error: ${err.message}`);
+bootstrap().catch(async (err) => {
+  defaultLogger.child({ service: 'webhook' }).exception(err, 'Startup failure');
+  await flushExceptionReports();
   process.exit(1);
 });

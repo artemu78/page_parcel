@@ -1,4 +1,4 @@
-import { Logger } from '@readable-web/observability';
+import { Logger, UpstreamResponseError } from '@readable-web/observability';
 import { VkUploadServerResponse, VkSaveDocResponse } from './types.js';
 export interface VkClientOptions {
     token: string;
@@ -6,7 +6,7 @@ export interface VkClientOptions {
     logger?: Logger;
     baseUrl?: string;
 }
-export declare class VkApiError extends Error {
+export declare class VkApiError extends UpstreamResponseError {
     errorCode: number;
     constructor(message: string, errorCode: number);
 }

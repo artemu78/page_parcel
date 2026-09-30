@@ -79,6 +79,7 @@ async function safeFetch(initialUrl, options = {}) {
         };
         const response = await new Promise((resolve, reject) => {
             const req = requestModule.request(requestOptions, (res) => {
+                logger.info('Article HTTP response', { httpStatus: res.statusCode });
                 let stream = res;
                 const encoding = res.headers['content-encoding'];
                 if (encoding === 'gzip') {

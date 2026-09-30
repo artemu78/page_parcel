@@ -1,4 +1,7 @@
-import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX, TableDescription, Column, Types } from 'ydb-sdk';
+import { YdbSearchStore } from './search-store.js';
+import { YdbExceptionOutbox } from './exception-outbox.js';
+import { defaultLogger } from '@readable-web/observability';
+import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX, TableDescription, Column, Types, StatusCode } from 'ydb-sdk';
 import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
 import { JobStore, RateLimitResult } from './store.js';
 
@@ -34,9 +37,13 @@ export class YdbJobStore implements JobStore {
     }
   }
 
+  public searchStore(): YdbSearchStore { return new YdbSearchStore(this.driver); }
+
+  public exceptionOutbox(): YdbExceptionOutbox { return new YdbExceptionOutbox(this.driver); }
+
   public async init(): Promise<void> {
     // Non-blocking warmup
-    this.driver.ready(5000).catch(() => {});
+    this.driver.ready(5000).catch(err => defaultLogger.exception(err, 'YDB warmup'));
 
     // Best-effort auto-creation of Settings, Users, and Roles tables using DDL TableDescription
     try {
@@ -48,7 +55,10 @@ export class YdbJobStore implements JobStore {
             .withColumn(new Column('value', Types.optional(Types.UTF8)))
             .withPrimaryKey('key');
           await session.createTable('Settings', settingsDesc);
-        } catch {
+        } catch (err) {
+          if (!(err instanceof Error && (err.constructor as { status?: number }).status === StatusCode.ALREADY_EXISTS)) {
+            defaultLogger.exception(err, 'Initialize operational table');
+          }
           // Table already exists or creation restricted
         }
 
@@ -63,7 +73,10 @@ export class YdbJobStore implements JobStore {
             .withColumn(new Column('ProfileLink', Types.optional(Types.UTF8)))
             .withPrimaryKey('ID');
           await session.createTable('Users', usersDesc);
-        } catch {
+        } catch (err) {
+          if (!(err instanceof Error && (err.constructor as { status?: number }).status === StatusCode.ALREADY_EXISTS)) {
+            defaultLogger.exception(err, 'Initialize operational table');
+          }
           // Table already exists or creation restricted
         }
 
@@ -74,7 +87,10 @@ export class YdbJobStore implements JobStore {
             .withColumn(new Column('Role', Types.optional(Types.INT32)))
             .withPrimaryKeys('User', 'Role');
           await session.createTable('Roles', rolesDesc);
-        } catch {
+        } catch (err) {
+          if (!(err instanceof Error && (err.constructor as { status?: number }).status === StatusCode.ALREADY_EXISTS)) {
+            defaultLogger.exception(err, 'Initialize operational table');
+          }
           // Table already exists or creation restricted
         }
 
@@ -83,11 +99,13 @@ export class YdbJobStore implements JobStore {
           await session.executeQuery(`
             DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
           `);
-        } catch {
+        } catch (err) {
+          defaultLogger.exception(err, 'Clean legacy settings');
           // Ignored if Settings table is not ready yet
         }
       });
-    } catch {
+    } catch (err) {
+      defaultLogger.exception(err, 'Initialize YDB tables');
       // In case session acquisition fails
     }
   }
@@ -556,7 +574,8 @@ export class YdbJobStore implements JobStore {
         expiresAt: now + this.settingsCacheTtlMs
       };
       return settings;
-    } catch {
+    } catch (err) {
+      defaultLogger.exception(err, 'Read runtime settings');
       return parseSettingsMap({});
     }
   }
@@ -757,7 +776,8 @@ export class YdbJobStore implements JobStore {
 
       this.roleUsersCache.set(role, { users, expiresAt: now + this.roleUsersCacheTtlMs });
       return users;
-    } catch {
+    } catch (err) {
+      defaultLogger.exception(err, 'Read user roles');
       return [];
     }
   }

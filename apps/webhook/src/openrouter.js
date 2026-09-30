@@ -60,6 +60,7 @@ class OpenRouterClient {
                 agent,
                 timeout: this.timeoutMs
             }, (res) => {
+                this.logger.info('OpenRouter HTTP response', { httpStatus: res.statusCode });
                 let data = '';
                 res.setEncoding('utf8');
                 res.on('data', (chunk) => {
@@ -67,19 +68,18 @@ class OpenRouterClient {
                 });
                 res.on('end', () => {
                     if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-                        this.logger.error(`OpenRouter HTTP ${res.statusCode}: ${data.slice(0, 300)}`);
-                        return reject(new Error(`OpenRouter API error (HTTP ${res.statusCode}): ${data.slice(0, 200)}`));
+                        return reject(new observability_1.UpstreamResponseError(`OpenRouter API error (HTTP ${res.statusCode})`, 'OpenRouter', res.statusCode));
                     }
                     try {
                         const json = JSON.parse(data);
                         const content = json.choices?.[0]?.message?.content;
                         if (typeof content !== 'string') {
-                            return reject(new Error('OpenRouter response did not contain message content'));
+                            return reject(new observability_1.UpstreamResponseError('OpenRouter response did not contain message content', 'OpenRouter', res.statusCode ?? 200));
                         }
                         resolve(content.trim());
                     }
                     catch (err) {
-                        reject(new Error(`Failed to parse OpenRouter response: ${err.message}`));
+                        reject(new observability_1.UpstreamResponseError('Failed to parse OpenRouter response', 'OpenRouter', res.statusCode ?? 200));
                     }
                 });
             });
@@ -87,7 +87,7 @@ class OpenRouterClient {
                 req.destroy(new Error(`OpenRouter request timed out after ${this.timeoutMs}ms`));
             });
             req.on('error', (err) => {
-                this.logger.error(`OpenRouter request error: ${(0, observability_1.redactSensitiveData)(err.message)}`);
+                this.logger.exception(err, 'OpenRouter network request');
                 reject(err);
             });
             req.write(payload);

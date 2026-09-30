@@ -1,3 +1,4 @@
+import { captureException, UpstreamResponseError } from './exceptions.js';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface LogContext {
@@ -11,6 +12,8 @@ export interface LogContext {
 }
 
 const SECRET_PATTERNS = [
+  /(?:github_pat_|gh[pousr]_)[a-zA-Z0-9_]+/g,
+  /sk-(?:or-v1-)?[a-zA-Z0-9_-]+/g,
   /access_token=[a-zA-Z0-9._-]+/gi,
   /vk1\.a\.[a-zA-Z0-9._-]+/gi,
   /secret=[a-zA-Z0-9._-]+/gi,
@@ -21,6 +24,13 @@ const SECRET_PATTERNS = [
 
 export function redactSensitiveData(input: string): string {
   let result = input;
+  // Exact known credentials cover provider errors echoing plain tokens without a prefix.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (/TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|CREDENTIAL/i.test(key) && value && value.length >= 8) {
+      result = result.split(value).join('[REDACTED]');
+    }
+  }
+  result = result.replace(/https?:\/\/[^\s"'<>]+/gi, url => url.replace(/[?#].*$/, '?[REDACTED]'));
   for (const pattern of SECRET_PATTERNS) {
     result = result.replace(pattern, (match) => {
       if (match.toLowerCase().startsWith('access_token=')) return 'access_token=[REDACTED]';
@@ -99,6 +109,22 @@ export class Logger {
     } else {
       process.stdout.write(out + '\n');
     }
+  }
+
+  public exception(error: unknown, operation: string, context?: LogContext): void {
+    const merged = { ...this.defaultContext, ...context };
+    const sdkStatus = error !== null && typeof error === 'object'
+      ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode : undefined;
+    if (typeof sdkStatus === 'number') {
+      this.info(operation, { ...merged, httpStatus: sdkStatus });
+      return;
+    }
+    if (error instanceof UpstreamResponseError) {
+      this.info(operation, { ...merged, service: error.service, httpStatus: error.statusCode });
+      return;
+    }
+    captureException(error, operation, merged);
+    this.error(operation, { ...merged, error: error instanceof Error ? error.message : String(error) });
   }
 
   public debug(message: string, context?: LogContext): void {

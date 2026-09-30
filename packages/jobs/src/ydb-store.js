@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.YdbJobStore = void 0;
+const search_store_js_1 = require("./search-store.js");
+const exception_outbox_js_1 = require("./exception-outbox.js");
+const observability_1 = require("@readable-web/observability");
 const ydb_sdk_1 = require("ydb-sdk");
 const types_js_1 = require("./types.js");
 class YdbJobStore {
@@ -28,9 +31,11 @@ class YdbJobStore {
             this.isOwnedDriver = true;
         }
     }
+    searchStore() { return new search_store_js_1.YdbSearchStore(this.driver); }
+    exceptionOutbox() { return new exception_outbox_js_1.YdbExceptionOutbox(this.driver); }
     async init() {
         // Non-blocking warmup
-        this.driver.ready(5000).catch(() => { });
+        this.driver.ready(5000).catch(err => observability_1.defaultLogger.exception(err, 'YDB warmup'));
         // Best-effort auto-creation of Settings, Users, and Roles tables using DDL TableDescription
         try {
             await this.driver.tableClient.withSession(async (session) => {
@@ -42,7 +47,10 @@ class YdbJobStore {
                         .withPrimaryKey('key');
                     await session.createTable('Settings', settingsDesc);
                 }
-                catch {
+                catch (err) {
+                    if (!(err instanceof Error && err.constructor.status === ydb_sdk_1.StatusCode.ALREADY_EXISTS)) {
+                        observability_1.defaultLogger.exception(err, 'Initialize operational table');
+                    }
                     // Table already exists or creation restricted
                 }
                 // 2. Users table
@@ -57,7 +65,10 @@ class YdbJobStore {
                         .withPrimaryKey('ID');
                     await session.createTable('Users', usersDesc);
                 }
-                catch {
+                catch (err) {
+                    if (!(err instanceof Error && err.constructor.status === ydb_sdk_1.StatusCode.ALREADY_EXISTS)) {
+                        observability_1.defaultLogger.exception(err, 'Initialize operational table');
+                    }
                     // Table already exists or creation restricted
                 }
                 // 3. Roles table
@@ -68,7 +79,10 @@ class YdbJobStore {
                         .withPrimaryKeys('User', 'Role');
                     await session.createTable('Roles', rolesDesc);
                 }
-                catch {
+                catch (err) {
+                    if (!(err instanceof Error && err.constructor.status === ydb_sdk_1.StatusCode.ALREADY_EXISTS)) {
+                        observability_1.defaultLogger.exception(err, 'Initialize operational table');
+                    }
                     // Table already exists or creation restricted
                 }
                 // Delete deprecated ErrorListeners and Admin records from Settings table (DML data query)
@@ -77,12 +91,14 @@ class YdbJobStore {
             DELETE FROM \`Settings\` WHERE key = 'ErrorListeners' OR key = 'AdminID' OR key = 'Admin';
           `);
                 }
-                catch {
+                catch (err) {
+                    observability_1.defaultLogger.exception(err, 'Clean legacy settings');
                     // Ignored if Settings table is not ready yet
                 }
             });
         }
-        catch {
+        catch (err) {
+            observability_1.defaultLogger.exception(err, 'Initialize YDB tables');
             // In case session acquisition fails
         }
     }
@@ -494,7 +510,8 @@ class YdbJobStore {
             };
             return settings;
         }
-        catch {
+        catch (err) {
+            observability_1.defaultLogger.exception(err, 'Read runtime settings');
             return (0, types_js_1.parseSettingsMap)({});
         }
     }
@@ -673,7 +690,8 @@ class YdbJobStore {
             this.roleUsersCache.set(role, { users, expiresAt: now + this.roleUsersCacheTtlMs });
             return users;
         }
-        catch {
+        catch (err) {
+            observability_1.defaultLogger.exception(err, 'Read user roles');
             return [];
         }
     }

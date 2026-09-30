@@ -2,10 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VkApiClient = exports.VkApiError = void 0;
 const observability_1 = require("@readable-web/observability");
-class VkApiError extends Error {
+class VkApiError extends observability_1.UpstreamResponseError {
     errorCode;
     constructor(message, errorCode) {
-        super((0, observability_1.redactSensitiveData)(message));
+        super((0, observability_1.redactSensitiveData)(message), 'VK', 200);
         this.name = 'VkApiError';
         this.errorCode = errorCode;
     }
@@ -43,16 +43,23 @@ class VkApiClient {
         catch (err) {
             throw new Error(`VK API network error on ${method}: ${(0, observability_1.redactSensitiveData)(err.message)}`);
         }
+        this.logger.info('VK HTTP response', { httpStatus: res.status });
         if (!res.ok) {
-            throw new Error(`VK API HTTP error on ${method}: ${res.status} ${res.statusText}`);
+            throw new observability_1.UpstreamResponseError(`VK API HTTP error on ${method}: ${res.status}`, 'VK', res.status);
         }
-        const data = (await res.json());
-        if (data.error) {
-            this.logger.error(`VK API error on ${method}: [${data.error.error_code}] ${data.error.error_msg}`);
+        let data;
+        try {
+            data = await res.json();
+        }
+        catch {
+            throw new observability_1.UpstreamResponseError('VK API returned invalid JSON', 'VK', res.status);
+        }
+        if (data?.error) {
+            this.logger.info('VK API response error', { method, apiCode: data.error.error_code });
             throw new VkApiError(data.error.error_msg, data.error.error_code);
         }
-        if (data.response === undefined) {
-            throw new Error(`VK API returned empty response object on ${method}`);
+        if (data?.response === undefined) {
+            throw new observability_1.UpstreamResponseError(`VK API returned empty response object on ${method}`, 'VK', res.status);
         }
         return data.response;
     }
@@ -81,14 +88,20 @@ class VkApiClient {
         catch (err) {
             throw new Error(`Failed to upload PDF to VK: ${(0, observability_1.redactSensitiveData)(err.message)}`);
         }
+        this.logger.info('VK HTTP response', { httpStatus: res.status });
         if (!res.ok) {
-            const errBody = await res.text().catch(() => '');
-            this.logger.error(`VK upload server HTTP error: ${res.status} ${res.statusText} on ${targetUrl}. Response: ${errBody.slice(0, 500)}`);
-            throw new Error(`VK upload server HTTP error: ${res.status} ${res.statusText} - ${errBody.slice(0, 200)}`);
+            await res.body?.cancel();
+            throw new observability_1.UpstreamResponseError(`VK upload server HTTP error: ${res.status}`, 'VK upload', res.status);
         }
-        const json = (await res.json());
-        if (!json.file) {
-            throw new Error(`VK upload server response missing file field: ${JSON.stringify(json)}`);
+        let json;
+        try {
+            json = await res.json();
+        }
+        catch {
+            throw new observability_1.UpstreamResponseError('VK upload server returned invalid JSON', 'VK upload', res.status);
+        }
+        if (!json?.file) {
+            throw new observability_1.UpstreamResponseError('VK upload server response missing file field', 'VK upload', res.status);
         }
         return json.file;
     }
@@ -115,7 +128,7 @@ class VkApiClient {
         }
         catch (err) {
             if (params.keyboard && err instanceof VkApiError && err.errorCode === 912) {
-                this.logger.warn(`VK bot capabilities disabled in community settings (error 912). Falling back to sending message without keyboard.`);
+                this.logger.info(`VK bot capabilities disabled in community settings (error 912). Falling back to sending message without keyboard.`);
                 const { keyboard: _, ...fallbackParams } = callParams;
                 return await this.callMethod('messages.send', fallbackParams);
             }

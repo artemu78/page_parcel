@@ -74,6 +74,7 @@ export async function safeFetch(
       body: Buffer;
     }>((resolve, reject) => {
       const req = requestModule.request(requestOptions, (res) => {
+        logger.info('Article HTTP response', { httpStatus: res.statusCode });
         let stream: NodeJS.ReadableStream = res;
         const encoding = res.headers['content-encoding'];
 

@@ -76,7 +76,7 @@ describe('OpenRouterClient', () => {
 });
 
 describe('Role 3 AI Chat in WebhookHandler', () => {
-  it('forwards message from role 3 user without command to OpenRouter and replies in VK', async () => {
+  it('searches free text for role 3 users instead of sending it to OpenRouter', async () => {
     const store = new MemoryJobStore();
     const queue = new MemoryQueueClient();
     const outbox = new OutboxService({ jobStore: store, queueClient: queue });
@@ -104,6 +104,7 @@ describe('Role 3 AI Chat in WebhookHandler', () => {
       outboxService: outbox,
       vkClient: mockVk as any,
       openRouterClient: mockOpenRouter as any,
+      searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
       validationOptions: {
         expectedGroupId: 12345,
         expectedSecret: 'sec',
@@ -139,13 +140,13 @@ describe('Role 3 AI Chat in WebhookHandler', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // Verify OpenRouter was called with model from Settings
-    assert.equal(openRouterCalled, true);
-    assert.equal(modelUsed, 'custom/fast-llm');
+    assert.equal(openRouterCalled, false);
+    assert.equal(modelUsed, undefined);
 
     // Verify VK reply was sent to the user
-    assert.equal(sentReplies.length, 1);
+    assert.equal(sentReplies.length, 2);
     assert.equal(sentReplies[0].peerId, role3UserId);
-    assert.ok(sentReplies[0].message.includes('Какая сегодня погода?'));
+    assert.ok(sentReplies[1].message.includes('https://example.org/weather'));
   });
 
   it('does NOT send message to OpenRouter if user does not have Role 3', async () => {
@@ -174,6 +175,7 @@ describe('Role 3 AI Chat in WebhookHandler', () => {
       outboxService: outbox,
       vkClient: mockVk as any,
       openRouterClient: mockOpenRouter as any,
+      searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
       validationOptions: {
         expectedGroupId: 12345,
         expectedSecret: 'sec',
@@ -202,8 +204,8 @@ describe('Role 3 AI Chat in WebhookHandler', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     assert.equal(openRouterCalled, false);
-    assert.equal(sentReplies.length, 1);
-    assert.ok(sentReplies[0].message.includes('Неизвестная команда'));
+    assert.equal(sentReplies.length, 2);
+    assert.ok(sentReplies[1].message.includes('https://example.org/weather'));
   });
 
   it('executes normal command even if user has Role 3', async () => {
@@ -232,6 +234,7 @@ describe('Role 3 AI Chat in WebhookHandler', () => {
       outboxService: outbox,
       vkClient: mockVk as any,
       openRouterClient: mockOpenRouter as any,
+      searchClient: { search: async () => [{ title: 'Погода', url: 'https://example.org/weather', snippet: 'Прогноз' }] },
       validationOptions: {
         expectedGroupId: 12345,
         expectedSecret: 'sec',

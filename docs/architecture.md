@@ -149,3 +149,23 @@
 2. **Untrusted Page Isolation:** Chromium runs sandboxed, without access to host secrets or filesystem. JavaScript is bounded, service workers are blocked, and storage is ephemeral.
 3. **No Dynamic Execution in PDF Template:** Generated HTML is sanitized and rendered with JavaScript turned off (`javaScriptEnabled: false`).
 4. **Resilient Failure Checkpoints:** If a worker dies after `docs.save`, the next attempt uses the saved attachment directly without re-fetching or re-uploading.
+
+## Runtime exception reporting
+
+The observability package classifies code exceptions separately from received
+upstream responses. A GitHub reporter creates `bug` issues; a dedicated YDB
+`exception_reports` outbox retains pending sanitized reports with delivery leases.
+This outbox does not change job processing attempts, queue acknowledgments, or VK
+attachment checkpoints. See the [operations runbook](operations.md#6-github-runtime-bug-reporting)
+for configuration and explicit delivery limits.
+
+## Search flow
+
+The webhook handles private free-text searches separately from PDF jobs.
+`SearchStore` atomically admits and logs searches with per-user cooldown, and
+caches up to 20 results for owner-bound pagination. Production uses YDB
+`search_queries` and `search_limits`; local mode uses memory. Serper JSON API
+requests use a fixed provider endpoint; result URLs are never fetched by the
+search parser. Inline selection dispatches the existing `/read` pipeline, which
+preserves URL policy, job leases, outbox, and attachment checkpoints.
+See [operations](operations.md#7-serper-search) for schema and failure limits.

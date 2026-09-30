@@ -3,7 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.defaultLogger = exports.Logger = void 0;
 exports.redactSensitiveData = redactSensitiveData;
 exports.sanitizeLogValue = sanitizeLogValue;
+const exceptions_js_1 = require("./exceptions.js");
 const SECRET_PATTERNS = [
+    /(?:github_pat_|gh[pousr]_)[a-zA-Z0-9_]+/g,
+    /sk-(?:or-v1-)?[a-zA-Z0-9_-]+/g,
     /access_token=[a-zA-Z0-9._-]+/gi,
     /vk1\.a\.[a-zA-Z0-9._-]+/gi,
     /secret=[a-zA-Z0-9._-]+/gi,
@@ -13,6 +16,13 @@ const SECRET_PATTERNS = [
 ];
 function redactSensitiveData(input) {
     let result = input;
+    // Exact known credentials cover provider errors echoing plain tokens without a prefix.
+    for (const [key, value] of Object.entries(process.env)) {
+        if (/TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY|CREDENTIAL/i.test(key) && value && value.length >= 8) {
+            result = result.split(value).join('[REDACTED]');
+        }
+    }
+    result = result.replace(/https?:\/\/[^\s"'<>]+/gi, url => url.replace(/[?#].*$/, '?[REDACTED]'));
     for (const pattern of SECRET_PATTERNS) {
         result = result.replace(pattern, (match) => {
             if (match.toLowerCase().startsWith('access_token='))
@@ -89,6 +99,21 @@ class Logger {
         else {
             process.stdout.write(out + '\n');
         }
+    }
+    exception(error, operation, context) {
+        const merged = { ...this.defaultContext, ...context };
+        const sdkStatus = error !== null && typeof error === 'object'
+            ? error.$metadata?.httpStatusCode : undefined;
+        if (typeof sdkStatus === 'number') {
+            this.info(operation, { ...merged, httpStatus: sdkStatus });
+            return;
+        }
+        if (error instanceof exceptions_js_1.UpstreamResponseError) {
+            this.info(operation, { ...merged, service: error.service, httpStatus: error.statusCode });
+            return;
+        }
+        (0, exceptions_js_1.captureException)(error, operation, merged);
+        this.error(operation, { ...merged, error: error instanceof Error ? error.message : String(error) });
     }
     debug(message, context) {
         this.log('debug', message, context);

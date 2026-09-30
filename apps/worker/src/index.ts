@@ -1,10 +1,12 @@
-import { defaultLogger } from '@readable-web/observability';
+import { defaultLogger, configureExceptionReporting, installRuntimeExceptionHandlers, flushExceptionReports } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
 import { MemoryJobStore, YdbJobStore } from '@readable-web/jobs';
 import { JobProcessor } from './job-processor.js';
 import { WorkerServer } from './server.js';
 
 async function bootstrap() {
+  configureExceptionReporting('worker');
+  installRuntimeExceptionHandlers('worker');
   const logger = defaultLogger.child({ service: 'worker' });
 
   const vkToken = process.env.VK_GROUP_TOKEN || '';
@@ -16,6 +18,9 @@ async function bootstrap() {
   if (ydbEndpoint && ydbDatabase) {
     logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
     const ydbStore = new YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
+    const exceptionOutbox = ydbStore.exceptionOutbox();
+    await exceptionOutbox.init();
+    configureExceptionReporting('worker', exceptionOutbox);
     await ydbStore.init();
     jobStore = ydbStore;
   } else {
@@ -42,6 +47,7 @@ async function bootstrap() {
     logger.info(`Received ${signal}, shutting down Worker Server...`);
     await server.stop();
     await processor.close();
+    await flushExceptionReports();
     process.exit(0);
   };
 
@@ -49,7 +55,8 @@ async function bootstrap() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-bootstrap().catch((err) => {
-  defaultLogger.error(`Fatal worker startup error: ${err.message}`);
+bootstrap().catch(async (err) => {
+  defaultLogger.child({ service: 'worker' }).exception(err, 'Startup failure');
+  await flushExceptionReports();
   process.exit(1);
 });

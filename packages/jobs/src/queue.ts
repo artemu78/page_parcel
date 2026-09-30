@@ -57,7 +57,7 @@ export class SqsQueueClient implements QueueClient {
       await this.client.send(command);
       this.logger.debug(`Published job ${job.id} to YMQ`);
     } catch (err) {
-      this.logger.error(`Failed to publish job ${job.id} to YMQ: ${(err as Error).message}`);
+      this.logger.exception(err, 'Failed to publish job  to YMQ');
       throw err;
     }
   }

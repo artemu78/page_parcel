@@ -25,7 +25,7 @@ class OutboxService {
             this.logger.debug(`Job ${job.id} successfully published and transitioned to queued`);
         }
         catch (err) {
-            this.logger.error(`Failed to publish job ${job.id} to queue, will remain in accepted state for retry: ${err.message}`);
+            this.logger.exception(err, 'Failed to publish job  to queue, will remain in accepted state for retry');
             throw err;
         }
     }

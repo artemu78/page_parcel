@@ -48,7 +48,8 @@ class JobProcessor {
                 }
             }
         }
-        catch {
+        catch (err) {
+            this.logger.exception(err, 'Read job settings');
             // Best effort setting resolution
         }
         // Start local validating egress proxy for this job
@@ -95,7 +96,8 @@ class JobProcessor {
                         }
                     }
                 }
-                catch {
+                catch (err) {
+                    this.logger.exception(err, 'Read PDF settings');
                     // Best effort setting resolution
                 }
                 // Generate clean reader PDF
@@ -129,7 +131,9 @@ class JobProcessor {
                     try {
                         sourceHost = new URL(job.submittedUrl).hostname;
                     }
-                    catch { }
+                    catch (err) {
+                        this.logger.exception(err, 'Resolve source hostname', { jobId: job.id });
+                    }
                 }
             }
             // 3. Send message with document attachment
@@ -155,12 +159,12 @@ class JobProcessor {
         }
         catch (err) {
             const errorMsg = err.message || String(err);
-            this.logger.error(`Error processing job ${job.id}: ${errorMsg}`);
+            this.logger.exception(err, 'Process job', { jobId: job.id, attempts: job.attempts });
             const article = err?.article;
             const diagnostics = err?.diagnostics;
             // Send error details to configured ErrorListeners
             await this.notifyErrorListeners(job, errorMsg, article, diagnostics).catch((listenerErr) => {
-                this.logger.warn(`Failed to notify error listeners for job ${job.id}: ${listenerErr.message}`);
+                this.logger.exception(listenerErr, 'Failed to notify error listeners for job');
             });
             const { category, isTerminal, userMessage } = this.classifyError(errorMsg, job);
             if (isTerminal || job.attempts >= job.maxAttempts) {
@@ -179,7 +183,7 @@ class JobProcessor {
             }
         }
         finally {
-            await proxy.stop().catch(() => { });
+            await proxy.stop().catch(err => { this.logger.exception(err, 'Close worker resources'); });
         }
     }
     classifyError(errMsg, job) {
@@ -253,7 +257,7 @@ class JobProcessor {
             });
         }
         catch (err) {
-            this.logger.warn(`Failed to send failure notification for job ${job.id}: ${err.message}`);
+            this.logger.exception(err, 'Failed to send failure notification for job');
         }
     }
     async notifyErrorListeners(job, errorMsg, article, diagnostics) {
@@ -266,7 +270,7 @@ class JobProcessor {
             }
         }
         catch (err) {
-            this.logger.warn(`Failed to fetch error listeners (role 2) from job store: ${err.message}`);
+            this.logger.exception(err, 'Failed to fetch error listeners (role 2) from job store');
             return;
         }
         if (!errorListeners || errorListeners.length === 0) {
@@ -312,7 +316,7 @@ class JobProcessor {
                 this.logger.info(`Sent error log for job ${job.id} to error listener ${listenerId}`);
             }
             catch (sendErr) {
-                this.logger.warn(`Failed to send error log for job ${job.id} to listener ${listenerId}: ${sendErr.message}`);
+                this.logger.exception(sendErr, 'Send error listener notification');
             }
         }
     }
@@ -328,13 +332,14 @@ class JobProcessor {
             }
             return str;
         }
-        catch {
+        catch (err) {
+            this.logger.exception(err, 'Format extraction diagnostic');
             return String(article);
         }
     }
     async close() {
-        await this.browserManager.close().catch(() => { });
-        await this.pdfGenerator.close().catch(() => { });
+        await this.browserManager.close().catch(err => { this.logger.exception(err, 'Close worker resources'); });
+        await this.pdfGenerator.close().catch(err => { this.logger.exception(err, 'Close worker resources'); });
     }
 }
 exports.JobProcessor = JobProcessor;

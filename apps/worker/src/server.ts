@@ -1,5 +1,5 @@
 import * as http from 'node:http';
-import { Logger, defaultLogger, metrics } from '@readable-web/observability';
+import { Logger, defaultLogger, metrics, flushExceptionReports } from '@readable-web/observability';
 import { JobProcessor } from './job-processor.js';
 import { JobQueueMessage } from '@readable-web/jobs';
 
@@ -89,7 +89,15 @@ export class WorkerServer {
       req.on('end', async () => {
         try {
           const bodyStr = Buffer.concat(chunks).toString('utf-8');
-          const bodyJson = JSON.parse(bodyStr);
+          let bodyJson;
+          try {
+            bodyJson = JSON.parse(bodyStr);
+          } catch {
+            this.logger.warn('Invalid request JSON');
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Bad Request');
+            return;
+          }
 
           this.logger.info(`Received trigger payload: ${bodyStr.slice(0, 500)}`);
 
@@ -149,6 +157,7 @@ export class WorkerServer {
             }
           }
 
+          await flushExceptionReports();
           if (hasRetryableFailure) {
             // Return 500 so YMQ trigger does NOT ack and retries after visibility timeout
             res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -159,7 +168,8 @@ export class WorkerServer {
             res.end(JSON.stringify({ status: 'ok', processed: jobIds.length }));
           }
         } catch (err) {
-          this.logger.error(`Error processing trigger payload: ${(err as Error).message}`);
+          this.logger.exception(err, 'Error processing trigger payload');
+          await flushExceptionReports();
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Internal Server Error');
         }

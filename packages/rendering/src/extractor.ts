@@ -1,3 +1,4 @@
+import { defaultLogger } from '@readable-web/observability';
 import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 
@@ -102,7 +103,8 @@ export class ContentExtractor {
     for (const sel of cookieSelectors) {
       try {
         doc.querySelectorAll(sel).forEach(el => el.remove());
-      } catch {
+      } catch (err) {
+        defaultLogger.exception(err, 'Remove consent elements');
         // Ignore any selector syntax exceptions
       }
     }
@@ -131,7 +133,8 @@ export class ContentExtractor {
           };
         }
       }
-    } catch {
+    } catch (err) {
+      defaultLogger.exception(err, 'Readability extraction');
       // Fallback to semantic extraction
     }
 
@@ -279,7 +282,8 @@ export class ContentExtractor {
     try {
       const parsed = new URL(pageUrl);
       return parsed.hostname + parsed.pathname;
-    } catch {
+    } catch (err) {
+      defaultLogger.exception(err, 'Resolve fallback article title');
       return 'Web Article';
     }
   }

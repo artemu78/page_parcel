@@ -57,6 +57,9 @@ class BrowserManager {
         try {
             page = await context.newPage();
             page.setDefaultTimeout(timeoutMs);
+            page.on('response', response => {
+                this.logger.info('Article HTTP response', { httpStatus: response.status() });
+            });
             // Route filtering: block media, fonts, images, trackers, websockets
             await page.route('**/*', async (route) => {
                 const req = route.request();
@@ -102,8 +105,7 @@ class BrowserManager {
             const status = response.status();
             const finalUrl = page.url();
             if (status >= 400) {
-                const pageTitle = await page.title().catch(() => '');
-                throw new Error(`UPSTREAM_ERROR: HTTP server returned status ${status}${pageTitle ? ` ("${pageTitle.trim()}")` : ''} for ${options.url}${finalUrl !== options.url ? ` (redirected to ${finalUrl})` : ''}`);
+                throw new observability_1.UpstreamResponseError(`UPSTREAM_ERROR: HTTP server returned status ${status}`, 'Article', status);
             }
             // Check Content-Type header on main document
             const contentType = response.headers()['content-type'] || '';
@@ -115,8 +117,8 @@ class BrowserManager {
                 throw new Error(`CONTENT_UNSUPPORTED: Unsupported document MIME type: "${contentType}" for ${options.url} (expected HTML or plain text)`);
             }
             // Bounded wait for load state (up to 5 seconds extra, do not wait forever)
-            await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {
-                this.logger.debug('Page load state timed out, proceeding with DOM content');
+            await page.waitForLoadState('load', { timeout: 5000 }).catch(err => {
+                this.logger.exception(err, 'Wait for page load');
             });
             // Simulate fast scroll to trigger lazy loading, IntersectionObservers, and scroll-reveal animations
             try {
@@ -141,8 +143,8 @@ class BrowserManager {
                     }
                 });
             }
-            catch {
-                this.logger.debug('Fast scroll evaluation skipped or timed out');
+            catch (err) {
+                this.logger.exception(err, 'Scroll page');
             }
             const currentUrl = page.url();
             const rawHtml = await page.content();
@@ -167,14 +169,14 @@ class BrowserManager {
         }
         finally {
             if (page) {
-                await page.close().catch(() => { });
+                await page.close().catch(err => { this.logger.exception(err, 'Close browser resources'); });
             }
-            await context.close().catch(() => { });
+            await context.close().catch(err => { this.logger.exception(err, 'Close browser resources'); });
         }
     }
     async close() {
         if (this.browser) {
-            await this.browser.close().catch(() => { });
+            await this.browser.close().catch(err => { this.logger.exception(err, 'Close browser resources'); });
             this.browser = null;
         }
     }

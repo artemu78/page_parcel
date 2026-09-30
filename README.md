@@ -7,6 +7,8 @@ Production-minded MVP of a VK community bot that converts public web articles an
 ## 1. Product Purpose & Scope
 
 * **User Interaction:**
+  * Send a search query as ordinary text: Serper results arrive with inline PDF buttons, seven per message and up to 20 per query. «Ещё» pages through cached results. Searches are limited to one per user every 30 seconds.
+  * `/start` or «Начать»: short Russian introduction. The first free-text query and `message_allow` callback also trigger a greeting.
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
   * `/version`: Reports the running service version, git commit, build timestamp, and runtime environment.
@@ -113,6 +115,12 @@ PORT=8081 node apps/worker/dist/index.js
 ```
 
 Without YDB configuration, each service creates its own in-memory job store. Without a queue URL, the webhook uses an in-memory queue. These separate processes do **not** form a connected local mock pipeline. Without a VK token, no real VK client is created. Use the test harnesses for mocked lifecycle checks; a connected deployment requires shared persistence and queue delivery to the worker.
+
+Code exceptions are reported as GitHub issues labelled `bug`; third-party HTTP
+responses are logged at Info. Configure `GITHUB_REPOSITORY` and the Lockbox
+`github_token` entry before production deployment. See the
+[reporting runbook](docs/operations.md#6-github-runtime-bug-reporting) for retries,
+privacy, and delivery limits.
 
 ## 6. Verification
 
@@ -228,6 +236,7 @@ Once Terraform creates the secret `readable-web-vk-secrets`:
    - Key: `vk_confirmation_code` → Value: *(your Callback API confirmation string)*
    - Key: `vk_group_token` → Value: *(your VK Community Access Token)*
    - Key: `openrouter_api_key` → Value: *(your OpenRouter API Key for Role 3 text model)*
+   - Key: `github_token` → Value: *(fine-grained GitHub token with Issues read/write access to the reporting repository)*
 4. Click **Save**. Check the secret-version references in Terraform and deploy revisions that use the intended version; saving a secret version alone is not evidence that running containers use it.
 
 ---
@@ -294,7 +303,7 @@ CREATE TABLE Roles (
 * **Supported Roles**:
   * **Role `1` (`Admin`)**: Service administrator.
   * **Role `2` (`ErrorListeners`)**: Users who receive real-time error notifications in VK direct messages.
-  * **Role `3` (`AiChat`)**: Users who can chat with the OpenRouter text model by sending plain messages without commands. Responses are generated via OpenRouter and forwarded directly to the user in VK.
+  * **Role `3` (`AiChat`)**: Legacy role; ordinary messages now trigger Serper search for all enabled users. OpenRouter client/settings remain available for existing integrations but are no longer routed from free text.
 
 *(Note: Target VK users must have initiated at least one conversation with the VK bot / community so that VK API allows sending direct messages).*
 
@@ -351,3 +360,7 @@ UPDATE Users SET Status = 0 WHERE ID = 123456789;
   ```
 
 
+
+### Search onboarding and storage
+
+See [search operations](docs/operations.md#7-serper-search) for VK onboarding setup, query-log schema, retention, rate limits, and provider limitations.

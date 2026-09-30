@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ContentExtractor = exports.ContentExtractionError = void 0;
+const observability_1 = require("@readable-web/observability");
 const readability_1 = require("@mozilla/readability");
 const jsdom_1 = require("jsdom");
 class ContentExtractionError extends Error {
@@ -74,7 +75,8 @@ class ContentExtractor {
             try {
                 doc.querySelectorAll(sel).forEach(el => el.remove());
             }
-            catch {
+            catch (err) {
+                observability_1.defaultLogger.exception(err, 'Remove consent elements');
                 // Ignore any selector syntax exceptions
             }
         }
@@ -101,7 +103,8 @@ class ContentExtractor {
                 }
             }
         }
-        catch {
+        catch (err) {
+            observability_1.defaultLogger.exception(err, 'Readability extraction');
             // Fallback to semantic extraction
         }
         // 2. Semantic Fallback for documentation or non-standard article structures
@@ -235,7 +238,8 @@ class ContentExtractor {
             const parsed = new URL(pageUrl);
             return parsed.hostname + parsed.pathname;
         }
-        catch {
+        catch (err) {
+            observability_1.defaultLogger.exception(err, 'Resolve fallback article title');
             return 'Web Article';
         }
     }

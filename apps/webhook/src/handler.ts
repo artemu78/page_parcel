@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { MemorySearchStore, SearchStore, SearchSession } from '@readable-web/jobs';
+import { SerperClient, SearchClient, searchPage } from './search.js';
+import { flushExceptionReports } from '@readable-web/observability';
 import {
   CallbackValidationOptions,
   validateCallbackPayload,
@@ -10,10 +14,12 @@ import {
 import { validateUrlSyntax } from '@readable-web/safe-network';
 import { JobStore, OutboxService } from '@readable-web/jobs';
 import { Logger, defaultLogger, metrics } from '@readable-web/observability';
-import { parseCommand, HELP_MESSAGE, formatVersionMessage } from './commands.js';
-import { OpenRouterClient, splitMessage } from './openrouter.js';
+import { parseCommand, GREETING_MESSAGE, HELP_MESSAGE, formatVersionMessage } from './commands.js';
+import { OpenRouterClient } from './openrouter.js';
 
 export interface WebhookHandlerOptions {
+  searchStore?: SearchStore;
+  searchClient?: SearchClient;
   jobStore: JobStore;
   outboxService: OutboxService;
   vkClient?: VkApiClient;
@@ -24,19 +30,21 @@ export interface WebhookHandlerOptions {
 }
 
 export class WebhookHandler {
+  private searchStore: SearchStore;
+  private searchClient: SearchClient;
   private jobStore: JobStore;
   private outboxService: OutboxService;
   private vkClient?: VkApiClient;
-  private openRouterClient?: OpenRouterClient;
   private validationOptions: CallbackValidationOptions;
   private logger: Logger;
   private maxRequestsPerMinute: number;
 
   constructor(options: WebhookHandlerOptions) {
+    this.searchStore = options.searchStore ?? new MemorySearchStore();
+    this.searchClient = options.searchClient ?? new SerperClient();
     this.jobStore = options.jobStore;
     this.outboxService = options.outboxService;
     this.vkClient = options.vkClient;
-    this.openRouterClient = options.openRouterClient;
     this.validationOptions = options.validationOptions;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'WebhookHandler' });
     this.maxRequestsPerMinute = options.maxUserRequestsPerMinute ?? 10;
@@ -59,12 +67,18 @@ export class WebhookHandler {
 
     const event = validation.event;
 
+    if (event.type === 'message_allow') {
+      const userId = (event as unknown as { object?: { user_id?: number } }).object?.user_id;
+      if (Number.isSafeInteger(userId) && userId! > 0) {
+        this.greetAllowedUser(userId!, event.event_id).catch(err => this.logger.exception(err, 'Send welcome message'));
+      }
+    }
     if (isMessageNewEvent(event)) {
       const msg = event.object.message;
       // Process event asynchronously or safely within callback deadline
       this.processMessageEvent(event).catch((err) => {
-        this.logger.error(`Error processing message event: ${(err as Error).message}`);
-      });
+        this.logger.exception(err, 'Error processing message event');
+      }).finally(() => flushExceptionReports());
     }
 
     // Acknowledge accepted event immediately with plain-text 'ok'
@@ -80,9 +94,41 @@ export class WebhookHandler {
     // Ignore messages sent by group itself
     if (fromId < 0) return;
 
+    if (peerId !== fromId) return; // Private messages only.
+    const user = await this.jobStore.getUser?.(fromId);
+    if (user?.status === 1) {
+      await this.sendReply(peerId, '⛔ Ваш доступ к сервису заблокирован администратором.', `blocked_${msg.id}`);
+      return;
+    }
     const command = parseCommand(text, msg.payload);
+    if (!user && command.type === 'unrecognized' && text.trim() && !text.trim().startsWith('/')) {
+      await this.sendReply(peerId, GREETING_MESSAGE, `welcome_${fromId}`);
+    }
+    if (command.type !== 'read') await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`);
 
     switch (command.type) {
+      case 'start':
+        await this.sendReply(peerId, GREETING_MESSAGE, `start_${msg.id}`);
+        break;
+      case 'search-read': {
+        const session = await this.searchStore.get(command.searchId);
+        if (!session || session.ownerId !== fromId || session.peerId !== peerId || session.status !== 'completed' || !session.results[command.index]) {
+          await this.sendReply(peerId, 'Эта выдача недоступна. Отправьте новый поисковый запрос.', `read_missing_${msg.id}`);
+        } else {
+          await this.handleReadCommand(peerId, fromId, session.results[command.index].url, event.event_id || `msg_${peerId}_${msg.id}`);
+        }
+        break;
+      }
+      case 'more': {
+        const session = await this.searchStore.get(command.searchId);
+        if (!session || session.ownerId !== fromId || session.peerId !== peerId || session.status !== 'completed' || command.offset >= session.results.length) {
+          await this.sendReply(peerId, 'Эта выдача недоступна. Отправьте новый поисковый запрос.', `more_missing_${msg.id}`);
+        } else {
+          const page = searchPage(session, command.offset);
+          await this.sendReply(peerId, page.message, `more_${session.id}_${command.offset}`, page.keyboard);
+        }
+        break;
+      }
       case 'help': {
         await this.sendReply(peerId, HELP_MESSAGE, `help_${msg.id}`);
         break;
@@ -104,111 +150,49 @@ export class WebhookHandler {
       }
 
       case 'unrecognized': {
-        const roles = await this.jobStore.getUserRoles?.(fromId).catch(() => []) ?? [];
-        if (roles.includes(3)) {
-          await this.handleRole3ChatMessage(peerId, fromId, msg.id, text.trim(), event.event_id || `msg_${msg.id}`);
-          break;
+        if (!text.trim() || text.trim().startsWith('/')) {
+          await this.sendReply(peerId, HELP_MESSAGE, `unrec_${msg.id}`);
+        } else {
+          await this.handleSearch(peerId, fromId, text.trim(), event.event_id || `msg_${peerId}_${msg.id}`);
         }
-
-        await this.sendReply(
-          peerId,
-          `Неизвестная команда. Отправьте /read <URL> для создания PDF или /help для справки.`,
-          `unrec_${msg.id}`
-        );
         break;
       }
     }
   }
 
-  private async handleRole3ChatMessage(
-    peerId: number,
-    fromId: number,
-    messageId: number,
-    prompt: string,
-    eventId: string
-  ): Promise<void> {
-    if (!prompt) return;
+  private async greetAllowedUser(userId: number, eventId?: string): Promise<void> {
+    const user = await this.jobStore.getUser?.(userId);
+    if (user?.status === 1) return;
+    await this.sendReply(userId, GREETING_MESSAGE, `welcome_${eventId || userId}`);
+  }
 
-    // 1. Check blocked user status and update access metrics
-    const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
-    if (userRecord && userRecord.status === 1) {
-      this.logger.warn(`Rejected role 3 request from blocked user ${fromId}`);
-      await this.sendReply(
-        peerId,
-        '⛔ Ваш доступ к сервису заблокирован администратором.',
-        `blocked_${eventId}`
-      );
+  private async handleSearch(peerId: number, ownerId: number, query: string, eventId: string): Promise<void> {
+    if (query.length > 500) {
+      await this.sendReply(peerId, 'Сократите запрос до 500 символов.', `query_long_${eventId}`);
       return;
     }
-
-    await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => {});
-
-    // 2. Atomic sliding window rate limiting
-    const rateCheck = await this.jobStore.checkAndConsumeRateLimit(
-      fromId,
-      this.maxRequestsPerMinute,
-      60000
-    );
-
-    if (!rateCheck.allowed) {
-      this.logger.warn(`Role 3 user ${fromId} exceeded rate limit`);
-      await this.sendReply(
-        peerId,
-        `⏳ Слишком много запросов. Пожалуйста, подождите ${rateCheck.retryAfterSeconds} сек.`,
-        `ratelimit_${eventId}`
-      );
+    const session: SearchSession = { id: createHash('sha256').update(`${ownerId}:${peerId}:${eventId}`).digest('hex'),
+      ownerId, peerId, query, createdAt: Date.now(), status: 'pending', results: [] };
+    const admission = await this.searchStore.begin(session);
+    if (admission.duplicate) return;
+    if (!admission.session) {
+      await this.sendReply(peerId, `Новый поиск доступен через ${admission.retryAfterSeconds} сек. Кнопкой «Ещё» можно пользоваться без ожидания.`, `search_limit_${eventId}`);
       return;
     }
-
-    if (!this.openRouterClient) {
-      this.logger.error('OpenRouter client is not configured');
-      await this.sendReply(
-        peerId,
-        '⚠️ Сервис языковой модели временно недоступен (не настроен ключ API OpenRouter).',
-        `or_unavail_${messageId}`
-      );
-      return;
-    }
-
-    // 3. Resolve dynamic model, base URL, and proxy from Settings table
-    let model: string | undefined;
-    let baseUrl: string | undefined;
-    let proxyUrl: string | undefined;
     try {
-      const settings = await this.jobStore.getSettings();
-      model = settings.openRouterModel;
-      baseUrl = settings.raw['BaseUrl'] || settings.raw['OpenRouterBaseUrl'] || settings.raw['openrouter_base_url'];
-      proxyUrl = settings.raw['Proxy'] || settings.raw['OpenRouterProxy'] || settings.raw['HttpsProxy'] || settings.raw['openrouter_proxy'];
+      session.results = (await this.searchClient.search(query)).slice(0, 20);
+      session.status = 'completed';
     } catch (err) {
-      this.logger.warn(`Failed to read settings, using defaults: ${(err as Error).message}`);
+      this.logger.exception(err, 'Serper search failed');
+      session.status = 'failed';
     }
-
-    this.logger.info(`Sending prompt for role 3 user ${fromId} to OpenRouter (model: ${model ?? 'default'})...`);
-
-    try {
-      const reply = await this.openRouterClient.complete({
-        prompt,
-        model,
-        baseUrl,
-        proxyUrl
-      });
-
-      const chunks = splitMessage(reply);
-      for (let i = 0; i < chunks.length; i++) {
-        await this.sendReply(
-          peerId,
-          chunks[i],
-          `or_reply_${messageId}_${i}`
-        );
-      }
-    } catch (err) {
-      this.logger.error(`OpenRouter completion failed for user ${fromId}: ${(err as Error).message}`);
-      await this.sendReply(
-        peerId,
-        `❌ Ошибка при обращении к языковой модели: ${(err as Error).message}`,
-        `or_err_${messageId}`
-      );
+    await this.searchStore.finish(session);
+    if (session.status === 'failed') {
+      await this.sendReply(peerId, 'Поиск временно недоступен. Попробуйте позже.', `search_failed_${session.id}`);
+      return;
     }
+    const page = searchPage(session, 0);
+    await this.sendReply(peerId, page.message, `search_${session.id}`, page.keyboard);
   }
 
   private async handleReadCommand(
@@ -222,7 +206,7 @@ export class WebhookHandler {
     try {
       validatedUrl = validateUrlSyntax(inputUrl);
     } catch (err) {
-      this.logger.warn(`Rejected URL command: ${(err as Error).message}`);
+      this.logger.warn('Rejected URL command');
       metrics.failedJobsTotal.inc({ category: 'INVALID_URL' });
       await this.sendReply(
         peerId,
@@ -233,7 +217,7 @@ export class WebhookHandler {
     }
 
     // 2. Check blocked user status and update access metrics
-    const userRecord = await this.jobStore.getUser?.(fromId).catch(() => null);
+    const userRecord = await this.jobStore.getUser?.(fromId).catch(err => { this.logger.exception(err, 'Read user access'); return null; });
     if (userRecord && userRecord.status === 1) {
       this.logger.warn(`Rejected request from blocked user ${fromId}`);
       await this.sendReply(
@@ -244,7 +228,7 @@ export class WebhookHandler {
       return;
     }
 
-    await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(() => {});
+    await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(err => { this.logger.exception(err, 'Update user access'); });
 
     // 3. Rate limiting (atomic)
     const rateCheck = await this.jobStore.checkAndConsumeRateLimit(
@@ -284,7 +268,7 @@ export class WebhookHandler {
     try {
       await this.outboxService.publishWithOutbox(job.id);
     } catch (err) {
-      this.logger.error(`Outbox publication failed for job ${job.id}: ${(err as Error).message}`);
+      this.logger.exception(err, 'Outbox publication failed for job');
       // Job remains in accepted state for background sweeper retry
     }
 
@@ -376,7 +360,7 @@ export class WebhookHandler {
         const errMsg = (err as Error)?.message || '';
         const errCode = (err as any)?.errorCode;
         if (errCode === 912 || errMsg.includes('912')) {
-          this.logger.warn(`Retrying message without keyboard due to VK error 912`);
+          this.logger.info(`Retrying message without keyboard due to VK error 912`);
           try {
             const randomId = generateStableRandomId(seed);
             await this.vkClient.sendMessage({
@@ -386,12 +370,12 @@ export class WebhookHandler {
             });
             return;
           } catch (retryErr) {
-            this.logger.warn(`Failed to send fallback VK message: ${(retryErr as Error).message}`);
+            this.logger.exception(retryErr, 'Failed to send fallback VK message');
             return;
           }
         }
       }
-      this.logger.warn(`Failed to send VK message: ${(err as Error).message}`);
+      this.logger.exception(err, 'Failed to send VK message');
     }
   }
 }
