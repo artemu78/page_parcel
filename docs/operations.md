@@ -199,7 +199,9 @@ Webhook startup creates two tables (and fails startup if they cannot be initiali
   Contains only the latest accepted search time; no query text.
 
 One serializable YDB transaction checks event deduplication and the per-user
-30-second cooldown, then writes both tables. PDF job limits are separate.
+30-second cooldown, then writes both tables. Conditional writes select from a
+one-row `AS_TABLE` source: YQL rejects `SELECT ... WHERE` without `FROM`
+with `Filtering is not allowed without FROM`. PDF job limits are separate.
 Seven cached results are sent per message; button payloads dispatch `/read URL` (long URLs use an owner-checked cached result index to stay within VK payload limits).
 «Ещё» contains the search ID and explicit offset, has no search limit, and does
 not contact Serper. Access checks bind cached results to owner and private peer.

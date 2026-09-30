@@ -71,7 +71,14 @@ it('search flow persists results, more bypasses limit, rejects cross-user cache 
 it('YDB search admission uses one transaction for event deduplication, cooldown and query log', async () => {
   const queries: string[] = [];
   const store = new YdbSearchStore({ tableClient: { withSessionRetry: async (fn: any) => fn({ executeQuery: async (query: string, params: any, tx: any) => {
-    queries.push(query); assert.ok(tx); return { resultSets: [{ columns: [], rows: [] }, { columns: [], rows: [] }] };
+    queries.push(query); assert.ok(tx);
+    // Catch the production YQL parser failure at the actual admission query seam.
+    for (const statement of query.split(';')) {
+      if (/UPSERT INTO/.test(statement) && /\bWHERE\b/.test(statement) && !/\bFROM\b/.test(statement)) {
+        throw new Error('Filtering is not allowed without FROM');
+      }
+    }
+    return { resultSets: [{ columns: [], rows: [] }, { columns: [], rows: [] }] };
   } }) } } as any);
   assert.ok((await store.begin({ id: 'event', ownerId: 1, peerId: 1, query: 'q', createdAt: Date.now(), status: 'pending', results: [] })).session);
   assert.equal(queries.length, 1); assert.match(queries[0], /UPSERT INTO search_limits/); assert.match(queries[0], /NOT EXISTS/);

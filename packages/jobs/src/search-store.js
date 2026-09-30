@@ -75,8 +75,10 @@ class YdbSearchStore {
         $allowed = NOT EXISTS (SELECT * FROM $old) AND COALESCE((SELECT last_at FROM $last), 0) <= $now - 30000;
         SELECT data FROM $old;
         SELECT last_at FROM $last;
-        UPSERT INTO search_queries SELECT $id AS id, $owner AS owner_id, $created AS created_at, $data AS data WHERE $allowed;
-        UPSERT INTO search_limits SELECT $owner AS owner_id, $now AS last_at WHERE $allowed;
+        UPSERT INTO search_queries SELECT $id AS id, $owner AS owner_id, $created AS created_at, $data AS data
+          FROM AS_TABLE(AsList(AsStruct(1 AS admission_row))) WHERE $allowed;
+        UPSERT INTO search_limits SELECT $owner AS owner_id, $now AS last_at
+          FROM AS_TABLE(AsList(AsStruct(1 AS admission_row))) WHERE $allowed;
       `, { '$id': ydb_sdk_1.TypedValues.utf8(s.id), '$owner': ydb_sdk_1.TypedValues.int64(s.ownerId),
                 '$now': ydb_sdk_1.TypedValues.int64(s.createdAt), '$created': ydb_sdk_1.TypedValues.timestamp(new Date(s.createdAt)),
                 '$data': ydb_sdk_1.TypedValues.utf8(JSON.stringify(s)) }, ydb_sdk_1.AUTO_TX);

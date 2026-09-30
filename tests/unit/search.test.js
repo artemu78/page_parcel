@@ -89,6 +89,12 @@ const results = Array.from({ length: 20 }, (_, i) => ({ title: `Title ${i}`, url
     const store = new index_js_1.YdbSearchStore({ tableClient: { withSessionRetry: async (fn) => fn({ executeQuery: async (query, params, tx) => {
                     queries.push(query);
                     strict_1.default.ok(tx);
+                    // Catch the production YQL parser failure at the actual admission query seam.
+                    for (const statement of query.split(';')) {
+                        if (/UPSERT INTO/.test(statement) && /\bWHERE\b/.test(statement) && !/\bFROM\b/.test(statement)) {
+                            throw new Error('Filtering is not allowed without FROM');
+                        }
+                    }
                     return { resultSets: [{ columns: [], rows: [] }, { columns: [], rows: [] }] };
                 } }) } });
     strict_1.default.ok((await store.begin({ id: 'event', ownerId: 1, peerId: 1, query: 'q', createdAt: Date.now(), status: 'pending', results: [] })).session);
