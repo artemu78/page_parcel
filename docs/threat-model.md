@@ -127,10 +127,12 @@ It is **NOT** a proxy, VPN, interactive browser, screenshot engine, or general-p
 
 ## Runtime bug-report boundary
 
-GitHub is an additional external sink. Runtime reports exclude exception messages,
-private request/response payloads, URLs, user identity, and arbitrary context. Only
-fixed operation names, safe correlation fields, timestamps, and code locations are
-exported. The Lockbox GitHub token is restricted to issue access in the configured
+GitHub is an additional external sink. Runtime reports include the deployed app
+version and exception messages with credential redaction, URL removal, and a
+12,000-character bound. They also include fixed operation names, safe correlation
+fields, timestamps, and code locations. Additional request/response payloads, user
+identity fields, and arbitrary context are excluded. Exception messages can embed
+application data; redaction does not guarantee removal of all personal data. The Lockbox GitHub token is restricted to issue access in the configured
 repository; redirects from GitHub requests are rejected. Reporting failures must
 not recurse into bug reporting. Public repositories make these reports public, and
 GitHub retention is independent of job-data TTL. Durable outbox records contain the

@@ -1,3 +1,4 @@
+export { redactSensitiveData, sanitizeLogValue } from './redaction.js';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export interface LogContext {
     jobId?: string;
@@ -8,8 +9,6 @@ export interface LogContext {
     durationMs?: number;
     [key: string]: unknown;
 }
-export declare function redactSensitiveData(input: string): string;
-export declare function sanitizeLogValue(val: unknown): unknown;
 export declare class Logger {
     private level;
     private defaultContext;

@@ -14,7 +14,7 @@ class Outbox {
     async pending() { return [...this.reports.values()]; }
     async remove(id) { this.reports.delete(id); }
 }
-(0, node_test_1.test)('exceptions create bug issues, retain code location, exclude private values and deduplicate propagation', async () => {
+(0, node_test_1.test)('exceptions create bug issues, retain code location and error text, redact secrets and deduplicate propagation', async () => {
     const calls = [];
     const reporter = new index_js_1.GitHubExceptionReporter({
         token: 'private-token', repository: 'owner/repo',
@@ -33,7 +33,8 @@ class Outbox {
     const payload = JSON.parse(String(posts[0].init?.body));
     strict_1.default.deepEqual(payload.labels, ['bug']);
     strict_1.default.match(payload.body, /app.ts:42:3/);
-    strict_1.default.doesNotMatch(payload.body, /private user text|ghp_privatekey|secret\/home|private.test|ownerId/);
+    strict_1.default.match(payload.body, /prompt=private user text/);
+    strict_1.default.doesNotMatch(payload.body, /ghp_privatekey|secret\/home|private.test|ownerId/);
     strict_1.default.equal((posts[0].init?.headers).Authorization, 'Bearer private-token');
 });
 (0, node_test_1.test)('durable reports survive reporter restart and GitHub failure without recursive reports', async () => {
@@ -152,5 +153,49 @@ class Outbox {
     const permissionError = new Error('No permission');
     session.describeTable = async () => { throw permissionError; };
     await strict_1.default.rejects(outbox.init(), error => error === permissionError);
+});
+(0, node_test_1.test)('issue includes deployed app version and complete multiline YDB diagnostic text', () => {
+    const previous = process.env.APP_VERSION;
+    process.env.APP_VERSION = 'v1.0.17 (abc1234)';
+    try {
+        const message = 'GenericError (code 400080): [\n  {\n    "position": {"row": 6, "column": 107},\n    "message": "Filtering is not allowed without FROM",\n    "severity": 1\n  }\n]';
+        const report = (0, index_js_1.buildExceptionReport)(new Error(message), 'Error processing message event', { service: 'webhook' });
+        strict_1.default.ok(report.body.includes('App version: v1.0.17 (abc1234)'));
+        strict_1.default.ok(report.body.includes(message));
+    }
+    finally {
+        if (previous === undefined)
+            delete process.env.APP_VERSION;
+        else
+            process.env.APP_VERSION = previous;
+    }
+});
+(0, node_test_1.test)('error text redacts configured credentials, preserves Markdown fences, and bounds report size', () => {
+    const previous = process.env.GITHUB_TOKEN;
+    const version = process.env.APP_VERSION;
+    process.env.GITHUB_TOKEN = 'example-plain-credential';
+    delete process.env.APP_VERSION;
+    try {
+        const text = 'Failure: example-plain-credential Bearer abcdefgh ghp_exampletoken sk-or-v1-examplekey vk1.a.exampletoken https://example.org/private?q=secret\n```json\n{"message":"diagnostic"}\n```';
+        const report = (0, index_js_1.buildExceptionReport)(new Error(text), 'Read settings', {});
+        strict_1.default.doesNotMatch(report.body, /example-plain-credential|abcdefgh|ghp_exampletoken|sk-or-v1-examplekey|vk1.a.exampletoken|example.org/);
+        strict_1.default.match(report.body, /App version: unknown/);
+        strict_1.default.ok(report.body.includes('````text\n'));
+        strict_1.default.ok(report.body.includes('```json\n{"message":"diagnostic"}\n```'));
+        const large = (0, index_js_1.buildExceptionReport)(new Error('x'.repeat(20000)), 'Read settings', {});
+        strict_1.default.match(large.body, /\[truncated\]/);
+        strict_1.default.ok(large.body.length < 14000);
+        strict_1.default.ok((0, index_js_1.buildExceptionReport)('Thrown string diagnostic', 'Read settings', {}).body.includes('Thrown string diagnostic'));
+    }
+    finally {
+        if (previous === undefined)
+            delete process.env.GITHUB_TOKEN;
+        else
+            process.env.GITHUB_TOKEN = previous;
+        if (version === undefined)
+            delete process.env.APP_VERSION;
+        else
+            process.env.APP_VERSION = version;
+    }
 });
 //# sourceMappingURL=exception-reporting.test.js.map

@@ -12,7 +12,7 @@ class Outbox implements ExceptionOutbox {
   async remove(id: string) { this.reports.delete(id); }
 }
 
-test('exceptions create bug issues, retain code location, exclude private values and deduplicate propagation', async () => {
+test('exceptions create bug issues, retain code location and error text, redact secrets and deduplicate propagation', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const reporter = new GitHubExceptionReporter({
     token: 'private-token', repository: 'owner/repo',
@@ -31,7 +31,8 @@ test('exceptions create bug issues, retain code location, exclude private values
   const payload = JSON.parse(String(posts[0].init?.body));
   assert.deepEqual(payload.labels, ['bug']);
   assert.match(payload.body, /app.ts:42:3/);
-  assert.doesNotMatch(payload.body, /private user text|ghp_privatekey|secret\/home|private.test|ownerId/);
+  assert.match(payload.body, /prompt=private user text/);
+  assert.doesNotMatch(payload.body, /ghp_privatekey|secret\/home|private.test|ownerId/);
   assert.equal((posts[0].init?.headers as Record<string, string>).Authorization, 'Bearer private-token');
 });
 
@@ -151,4 +152,41 @@ test('persistent outbox startup tolerates an existing table and concurrent creat
   const permissionError = new Error('No permission');
   session.describeTable = async () => { throw permissionError; };
   await assert.rejects(outbox.init(), error => error === permissionError);
+});
+
+
+test('issue includes deployed app version and complete multiline YDB diagnostic text', () => {
+  const previous = process.env.APP_VERSION;
+  process.env.APP_VERSION = 'v1.0.17 (abc1234)';
+  try {
+    const message = 'GenericError (code 400080): [\n  {\n    "position": {"row": 6, "column": 107},\n    "message": "Filtering is not allowed without FROM",\n    "severity": 1\n  }\n]';
+    const report = buildExceptionReport(new Error(message), 'Error processing message event', { service: 'webhook' });
+    assert.ok(report.body.includes('App version: v1.0.17 (abc1234)'));
+    assert.ok(report.body.includes(message));
+  } finally {
+    if (previous === undefined) delete process.env.APP_VERSION;
+    else process.env.APP_VERSION = previous;
+  }
+});
+
+test('error text redacts configured credentials, preserves Markdown fences, and bounds report size', () => {
+  const previous = process.env.GITHUB_TOKEN;
+  const version = process.env.APP_VERSION;
+  process.env.GITHUB_TOKEN = 'example-plain-credential';
+  delete process.env.APP_VERSION;
+  try {
+    const text = 'Failure: example-plain-credential Bearer abcdefgh ghp_exampletoken sk-or-v1-examplekey vk1.a.exampletoken https://example.org/private?q=secret\n```json\n{"message":"diagnostic"}\n```';
+    const report = buildExceptionReport(new Error(text), 'Read settings', {});
+    assert.doesNotMatch(report.body, /example-plain-credential|abcdefgh|ghp_exampletoken|sk-or-v1-examplekey|vk1.a.exampletoken|example.org/);
+    assert.match(report.body, /App version: unknown/);
+    assert.ok(report.body.includes('````text\n'));
+    assert.ok(report.body.includes('```json\n{"message":"diagnostic"}\n```'));
+    const large = buildExceptionReport(new Error('x'.repeat(20000)), 'Read settings', {});
+    assert.match(large.body, /\[truncated\]/);
+    assert.ok(large.body.length < 14000);
+    assert.ok(buildExceptionReport('Thrown string diagnostic', 'Read settings', {}).body.includes('Thrown string diagnostic'));
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = previous;
+    if (version === undefined) delete process.env.APP_VERSION; else process.env.APP_VERSION = version;
+  }
 });

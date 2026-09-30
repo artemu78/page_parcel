@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { redactSensitiveData } from './redaction.js';
 
 /** A received upstream response is operational information, not a code exception. */
 export class UpstreamResponseError extends Error {
@@ -35,8 +36,7 @@ export interface GitHubExceptionReporterOptions {
   onFailure?: (reportId: string) => void;
 }
 
-// Public issues must never contain user content, submitted URLs, or exception messages.
-// Messages can embed arbitrary HTTP bodies or prompts. Keep only code frames and fixed context.
+// Report the diagnostic message, with credential and URL redaction; never export arbitrary context.
 export function buildExceptionReport(error: unknown, operation: string, context: Record<string, unknown>): ExceptionReport {
   const frames = error instanceof Error
     ? (error.stack ?? '').split('\n').flatMap(line => {
@@ -51,6 +51,14 @@ export function buildExceptionReport(error: unknown, operation: string, context:
       safeContext[key] = value;
     }
   }
+  const appVersion = redactSensitiveData(process.env.APP_VERSION || 'unknown (APP_VERSION not set)')
+    .replace(/[\r\n`]/g, ' ').slice(0, 256);
+  const message = redactSensitiveData(error instanceof Error ? error.message : String(error))
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL REDACTED]');
+  const errorText = message.length > 12000 ? message.slice(0, 12000) + '\n[truncated]' : message;
+  // An exception may contain Markdown fences; keep its text inside a single code block.
+  const fenceLength = Math.max(3, ...Array.from(errorText.matchAll(/`+/g), match => match[0].length + 1));
+  const errorBlock = `${'`'.repeat(fenceLength)}text\n${errorText}\n${'`'.repeat(fenceLength)}`;
   const id = randomUUID();
   const kind = error instanceof TypeError ? 'TypeError' : error instanceof SyntaxError ? 'SyntaxError' : 'Exception';
   // operation is a developer-defined label, never interpolate request data into it.
@@ -58,7 +66,7 @@ export function buildExceptionReport(error: unknown, operation: string, context:
   return {
     id,
     title: `[bug] ${safeContext.service ?? 'runtime'}: ${safeOperation} (${kind})`,
-    body: `<!-- exception-report:${id} -->\nCode exception captured at ${new Date().toISOString()}.\n\nOperation: ${safeOperation}\n\nContext:\n\`\`\`json\n${JSON.stringify(safeContext, null, 2)}\n\`\`\`\n\nCode frames:\n\`\`\`text\n${frames || '(unavailable)'}\n\`\`\`\n\nException messages and private payloads are intentionally omitted. Correlate with sanitized service logs.`
+    body: `<!-- exception-report:${id} -->\nCode exception captured at ${new Date().toISOString()}.\n\nApp version: ${appVersion}\n\nOperation: ${safeOperation}\n\nError text:\n${errorBlock}\n\nContext:\n\`\`\`json\n${JSON.stringify(safeContext, null, 2)}\n\`\`\`\n\nCode frames:\n\`\`\`text\n${frames || '(unavailable)'}\n\`\`\`\n\nCredentials and URLs are redacted from error text. Additional request payloads and arbitrary exception properties are omitted.`
   };
 }
 

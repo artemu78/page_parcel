@@ -140,12 +140,18 @@ exit. Reporter failures are warnings and never recursively create more issues.
 Monitor `Exception report pending; delivery will retry` and the table backlog.
 Pending reports have no TTL and require recovery/cleanup if token access is revoked.
 
-Issue titles and bodies contain only fixed operation labels, safe correlation
-fields, timestamps, and code filenames/line numbers. Exception messages, absolute
-paths, request URLs, user IDs, prompts, article text, response bodies, and arbitrary
-exception properties are excluded. Correlate report timestamps/job IDs with service
-logs to investigate. GitHub issues have the repository's visibility and retention;
-remove them there when required.
+Issue bodies include the deployed `APP_VERSION` (or an explicit unknown marker),
+fixed operation labels, safe correlation fields, timestamps, code filenames/line
+numbers, and the exception message. Multiline diagnostics are preserved, with
+credential redaction and URL removal before persistence or GitHub delivery. Error
+text is limited to 12,000 characters with an explicit truncation marker; Markdown
+fences in the message are kept inside its code block. Additional request payloads
+and arbitrary exception properties are not exported. Error messages can themselves
+contain application data, so avoid embedding private payloads in exceptions;
+redaction is not a guarantee of removing every kind of personal data. Pending
+reports preserve the version and text from capture time. Existing issues and
+previously stored report bodies are not retroactively changed. GitHub issues have
+the repository's visibility and retention; remove them there when required.
 
 Delivery is best effort before the outbox is initialized, without YDB (local mode),
 or while YDB is unavailable. A hard kill/OOM before persistence cannot be reported
