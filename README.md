@@ -102,6 +102,8 @@ npm run test:security
 
 ## 5. Local Development Mode
 
+See the [local development feasibility research](docs/local-development-research.md) for using VS Code public port forwarding with VK, the current pipeline gaps, and a proposed connected development runner.
+
 Build before starting the applications. Review [.env.example](.env.example) for configuration names and provide actual values through the process environment; the application entrypoints do not load this file automatically.
 
 Start the services in separate terminals, with distinct ports:
