@@ -1,0 +1,18 @@
+{
+  "message": "📖 Тестовое сообщение\n\nОтредактируйте этот текст и снова запустите отправку.",
+  "dont_parse_links": true,
+  "keyboard": {
+    "inline": true,
+    "buttons": [
+      [
+        {
+          "action": {
+            "type": "callback",
+            "label": "Скачать PDF",
+            "payload": "{\"read\":\"https://ya.ru/\"}"
+          }
+        }
+      ]
+    ]
+  }
+}

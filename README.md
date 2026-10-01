@@ -124,6 +124,43 @@ responses are logged at Info. Configure `GITHUB_REPOSITORY` and the Lockbox
 [reporting runbook](docs/operations.md#6-github-runtime-bug-reporting) for retries,
 privacy, and delivery limits.
 
+### Send a local message preview to VK
+
+No deployment is needed to preview manually written bot messages. Put these values
+in the ignored `.env` file at the repository root:
+
+```dotenv
+VK_GROUP_TOKEN=<your community access token with messaging permission>
+VK_PREVIEW_PEER_ID=<your numeric VK user ID>
+```
+
+The community token determines the sender. First open a conversation with that
+community and allow messages. Edit [the example response](examples/vk-response.json),
+then run from the repository root (after the initial installation and build):
+
+```sh
+npm run vk:preview
+# Send a different response file:
+npm run vk:preview -- /path/to/response.json
+# Validate and display parameters without sending or requiring a token:
+npm run vk:preview -- --dry-run
+```
+
+The script loads `.env`; existing environment variables take precedence. Set
+`VK_API_VERSION` optionally (default `5.199`, matching the application client).
+Each run sends a new message. The response file accepts `message`, `attachment`,
+`keyboard`, `template`, `dont_parse_links`, and `disable_mentions`; keyboards and
+templates are JSON objects. Attachments must already exist in VK; this script
+does not upload files. VK validates button/template details. Errors are reported
+without silently removing keyboards. Enable the community's bot capabilities
+if VK rejects keyboards with error 912.
+
+The example uses a link button. Text or callback buttons need their own handlers;
+clicking text buttons can invoke the deployed bot's normal command flow. This
+sender previews messages, not the incoming-event or PDF processing pipeline.
+
+---
+
 ## 6. Verification
 
 The repository includes [unit tests](tests/unit), [integration tests](tests/integration), and [security tests](tests/security). Tests import built output, so run the build before testing. Browser-based tests require a compatible Chromium installation and runtime dependencies; the [worker Dockerfile](infra/containers/Dockerfile.worker) includes browser setup for its container image. Continuous integration runs the build, typechecks, and the full test suite automatically on pull requests via [GitHub Actions](.github/workflows/test.yml).
