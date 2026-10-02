@@ -65,6 +65,8 @@ export interface AppSettings {
   errorListeners: number[];
   maxRequestsPerJob?: number;
   openRouterModel?: string;
+  openRouterBaseUrl?: string;
+  openRouterProxy?: string;
   pdfFormat?: string;
   raw: Record<string, string>;
 }
@@ -131,6 +133,12 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
   const modelRaw = getVal('OpenRouterModel') ?? getVal('Model') ?? getVal('openrouter_model');
   const openRouterModel = modelRaw && modelRaw.trim().length > 0 ? modelRaw.trim() : undefined;
 
+  const baseUrlRaw = getVal('OpenRouterBaseUrl') ?? getVal('BaseUrl') ?? getVal('openrouter_base_url');
+  const openRouterBaseUrl = baseUrlRaw?.trim() || undefined;
+  const proxyRaw = getVal('OpenRouterProxy') ?? getVal('Proxy') ?? getVal('openrouter_proxy');
+  // An explicit empty proxy disables an inherited forward proxy.
+  const openRouterProxy = proxyRaw === undefined ? undefined : proxyRaw.trim();
+
   const formatRaw = getVal('PdfFormat') ?? getVal('pdf_format');
   const pdfFormat = formatRaw && formatRaw.trim().length > 0 ? formatRaw.trim().toLowerCase() : undefined;
 
@@ -139,6 +147,8 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
     errorListeners,
     maxRequestsPerJob,
     openRouterModel,
+    openRouterBaseUrl,
+    openRouterProxy,
     pdfFormat,
     raw
   };

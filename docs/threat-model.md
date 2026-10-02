@@ -162,3 +162,12 @@ and fences pending completions. Application logs and GitHub reports must not
 include prompts or completions. Provider and VK retention are independent.
 Per-user quotas, reservations and bounded event deduplication reduce repeated
 provider calls; delivery remains best-effort as described in operations.
+
+
+OpenRouter routing honors the database reverse-proxy base URL and separate forward
+proxy settings. Diagnostics emit only hostnames, model, routing flags, bounded
+provider correlation IDs, numeric error codes and fixed failure categories. Raw
+error messages, HTML/JSON response bodies and error metadata are excluded because
+they may contain prompts or rejected completions. Responses are limited to one
+MiB. HTTP rejections remain operational events, not GitHub bug reports. See the
+[routing rules](operations.md#openrouter-routing-and-diagnostics).

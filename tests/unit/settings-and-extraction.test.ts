@@ -191,3 +191,18 @@ describe('ContentExtractor Error with Article Context and Diagnostics', () => {
   });
 });
 
+
+describe('OpenRouter routing settings', () => {
+  it('parses aliases case-insensitively, prefers named settings, and preserves explicit proxy disable', () => {
+    const settings = parseSettingsMap({ baseurl: ' https://example.org/aws/api/v1/ ', PROXY: ' http://example.org:8080 ' });
+    assert.equal(settings.openRouterBaseUrl, 'https://example.org/aws/api/v1/');
+    assert.equal(settings.openRouterProxy, 'http://example.org:8080');
+    const named = parseSettingsMap({ OpenRouterBaseUrl: 'https://example.org/named', BaseUrl: 'https://example.org/alias',
+      OpenRouterProxy: '', Proxy: 'http://example.org:8080' });
+    assert.equal(named.openRouterBaseUrl, 'https://example.org/named');
+    assert.equal(named.openRouterProxy, '');
+    const empty = parseSettingsMap({ BaseUrl: '  ' });
+    assert.equal(empty.openRouterBaseUrl, undefined);
+    assert.equal(empty.openRouterProxy, undefined);
+  });
+});

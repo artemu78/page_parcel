@@ -319,4 +319,86 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
         strict_1.default.ok(sentReplies[0].message.includes('заблокирован'));
     });
 });
+(0, node_test_1.describe)('OpenRouter routing and safe diagnostics', () => {
+    (0, node_test_1.it)('uses the database reverse proxy and logs 403 diagnostics without exporting private response data', async () => {
+        const records = [];
+        const logger = { child() { return this; }, info(message, context) { records.push({ message, context }); }, exception() { } };
+        let requests = 0;
+        const server = http.createServer((req, res) => {
+            requests++;
+            strict_1.default.equal(req.url, '/api/v1/chat/completions');
+            res.writeHead(403, { 'Content-Type': 'application/json', 'x-request-id': 'upstream-403', 'cf-ray': 'abcd1234-IAD' });
+            res.end(JSON.stringify({ error: { code: 403, message: 'Country not supported: PRIVATE-PROMPT sk-or-v1-private-key',
+                    metadata: { flagged_input: 'PRIVATE-HISTORY', raw: 'PRIVATE-RESPONSE' } } }));
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const baseUrl = `http://127.0.0.1:${server.address().port}/api/v1`;
+            const store = new index_js_1.MemoryJobStore();
+            await store.setSetting('BaseUrl', baseUrl);
+            await store.setSetting('Model', 'test/model');
+            const replies = [];
+            const handler = new handler_js_1.WebhookHandler({ jobStore: store,
+                outboxService: new index_js_1.OutboxService({ jobStore: store, queueClient: new index_js_1.MemoryQueueClient() }),
+                openRouterClient: new openrouter_js_1.OpenRouterClient({ apiKey: 'sk-or-v1-private-key', baseUrl: 'http://127.0.0.1:1/unconfigured', logger: logger }),
+                vkClient: { sendMessage: async (p) => { replies.push(p); return 1; } },
+                validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+            const send = (id, text, payload) => handler.processMessageEvent({ event_id: `proxy-${id}`,
+                object: { message: { id, peer_id: 42, from_id: 42, text, payload: payload && JSON.stringify(payload) } } });
+            await send(1, '', { command: 'mode', mode: 'ai' });
+            await send(2, 'PRIVATE-PROMPT');
+            strict_1.default.equal(requests, 1);
+            const record = records.find(r => r.message === 'OpenRouter request rejected');
+            strict_1.default.ok(record);
+            strict_1.default.equal(record.context.httpStatus, 403);
+            strict_1.default.equal(record.context.destinationHost, '127.0.0.1');
+            strict_1.default.equal(record.context.routing, 'reverse_proxy');
+            strict_1.default.equal(record.context.model, 'test/model');
+            strict_1.default.equal(record.context.failureCategory, 'geo_restriction');
+            strict_1.default.equal(record.context.providerErrorCode, 403);
+            strict_1.default.equal(record.context.upstreamRequestId, 'upstream-403');
+            strict_1.default.equal(record.context.cloudflareRay, 'abcd1234-IAD');
+            strict_1.default.equal(record.context.forwardProxyUsed, false);
+            strict_1.default.match(record.context.openRouterRequestId, /^[a-f0-9-]+$/);
+            const serialized = JSON.stringify(records);
+            for (const forbidden of ['PRIVATE-PROMPT', 'PRIVATE-HISTORY', 'PRIVATE-RESPONSE', 'private-key', '/api/v1', 'Authorization'])
+                strict_1.default.ok(!serialized.includes(forbidden));
+            strict_1.default.match(replies.at(-1).message, /Не удалось/);
+        }
+        finally {
+            await new Promise(resolve => server.close(() => resolve()));
+        }
+    });
+    (0, node_test_1.it)('keeps HTML 403 responses operational and bounds oversized upstream bodies', async () => {
+        const { UpstreamResponseError } = await import('../../packages/observability/dist/index.js');
+        const records = [];
+        const logger = { child() { return this; }, info(message, context) { records.push({ message, ...context }); }, exception() { } };
+        let oversized = false;
+        const server = http.createServer((req, res) => {
+            if (oversized) {
+                res.writeHead(200);
+                res.end('x'.repeat(1048577));
+            }
+            else {
+                res.writeHead(403, { 'Content-Type': 'text/html', 'x-request-id': 'unsafe header with PRIVATE-DATA' });
+                res.end('<html>PRIVATE-DATA</html>');
+            }
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const client = new openrouter_js_1.OpenRouterClient({ apiKey: 'test', baseUrl: `http://127.0.0.1:${server.address().port}/api/v1`, logger: logger });
+            await strict_1.default.rejects(client.complete({ prompt: 'private' }), error => error instanceof UpstreamResponseError && error.statusCode === 403);
+            strict_1.default.equal(records.at(-1).failureCategory, 'upstream_rejection');
+            strict_1.default.equal(records.at(-1).responseFormat, 'non_json');
+            strict_1.default.equal(records.at(-1).upstreamRequestId, undefined);
+            oversized = true;
+            await strict_1.default.rejects(client.complete({ prompt: 'private' }), error => error instanceof UpstreamResponseError && /size limit/.test(error.message));
+            strict_1.default.ok(records.some(r => r.failureCategory === 'response_too_large'));
+            strict_1.default.ok(!JSON.stringify(records).includes('PRIVATE-DATA'));
+        }
+        finally {
+            await new Promise(resolve => server.close(() => resolve()));
+        }
+    });
+});
 //# sourceMappingURL=openrouter-role3.test.js.map

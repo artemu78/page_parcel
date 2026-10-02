@@ -5,11 +5,44 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.OpenRouterClient = void 0;
 exports.splitMessage = splitMessage;
+const node_crypto_1 = require("node:crypto");
 const node_https_1 = __importDefault(require("node:https"));
 const node_http_1 = __importDefault(require("node:http"));
 const node_url_1 = require("node:url");
 const https_proxy_agent_1 = require("https-proxy-agent");
 const observability_1 = require("@readable-web/observability");
+/** Provider messages may echo prompts. Emit only fixed categories and numeric codes. */
+function failureDetails(data) {
+    let json;
+    try {
+        json = JSON.parse(data);
+    }
+    catch {
+        return { responseFormat: 'non_json', failureCategory: 'upstream_rejection' };
+    }
+    const error = json && typeof json === 'object' ? json.error : undefined;
+    const fields = error && typeof error === 'object' ? error : {};
+    const message = typeof fields.message === 'string' ? fields.message.toLowerCase() : '';
+    const metadata = fields.metadata && typeof fields.metadata === 'object' ? fields.metadata : {};
+    let failureCategory = 'upstream_rejection';
+    if (/country|region|geographic|geo.block/.test(message))
+        failureCategory = 'geo_restriction';
+    else if (/api key|unauthorized|authentication/.test(message))
+        failureCategory = 'authentication';
+    else if (/credit|insufficient funds|payment/.test(message))
+        failureCategory = 'credits';
+    else if (/rate limit|too many requests/.test(message))
+        failureCategory = 'rate_limit';
+    else if (/moderation|alignment|flagged/.test(message) || metadata.flagged_input !== undefined || metadata.alignment !== undefined)
+        failureCategory = 'content_policy';
+    else if (/model.*(?:not found|unavailable)|no endpoints/.test(message))
+        failureCategory = 'model_unavailable';
+    return { responseFormat: 'json', failureCategory,
+        ...(typeof fields.code === 'number' && Number.isSafeInteger(fields.code) ? { providerErrorCode: fields.code } : {}) };
+}
+function safeResponseId(value) {
+    return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : undefined;
+}
 class OpenRouterClient {
     apiKey;
     baseUrl;
@@ -52,6 +85,15 @@ class OpenRouterClient {
         const isLoopback = targetUrl.hostname === 'localhost' || targetUrl.hostname === '127.0.0.1' || targetUrl.hostname === '::1';
         const hasProxy = typeof effectiveProxy === 'string' && effectiveProxy.trim().length > 0;
         const agent = (hasProxy && !isLoopback) ? new https_proxy_agent_1.HttpsProxyAgent(effectiveProxy) : undefined;
+        const diagnostics = {
+            openRouterRequestId: (0, node_crypto_1.randomUUID)(), model: model.slice(0, 128),
+            destinationHost: targetUrl.hostname,
+            routing: targetUrl.hostname === 'openrouter.ai' ? 'direct' : 'reverse_proxy',
+            forwardProxyUsed: Boolean(agent),
+            ...(agent ? { forwardProxyHost: new node_url_1.URL(effectiveProxy).hostname } : {})
+        };
+        this.logger.info('OpenRouter request', diagnostics);
+        const startedAt = Date.now();
         return new Promise((resolve, reject) => {
             const isHttps = targetUrl.protocol === 'https:';
             const requestFn = isHttps ? node_https_1.default.request : node_http_1.default.request;
@@ -61,25 +103,42 @@ class OpenRouterClient {
                 agent,
                 timeout: this.timeoutMs
             }, (res) => {
-                this.logger.info('OpenRouter HTTP response', { httpStatus: res.statusCode });
+                const responseContext = { ...diagnostics, httpStatus: res.statusCode,
+                    upstreamRequestId: safeResponseId(res.headers['x-request-id'] ?? res.headers['request-id']),
+                    cloudflareRay: safeResponseId(res.headers['cf-ray']),
+                    responseFormat: res.headers['content-type']?.includes('json') ? 'json' : 'non_json' };
+                this.logger.info('OpenRouter HTTP response', responseContext);
                 let data = '';
+                let responseBytes = 0;
                 res.setEncoding('utf8');
                 res.on('data', (chunk) => {
+                    responseBytes += Buffer.byteLength(chunk);
+                    if (responseBytes > 1048576) {
+                        this.logger.info('OpenRouter response rejected', { ...responseContext, failureCategory: 'response_too_large', responseBytes });
+                        reject(new observability_1.UpstreamResponseError('OpenRouter response exceeded size limit', 'OpenRouter', res.statusCode ?? 200));
+                        res.destroy();
+                        return;
+                    }
                     data += chunk;
                 });
+                res.on('error', reject);
+                res.on('aborted', () => reject(new observability_1.UpstreamResponseError('OpenRouter response interrupted', 'OpenRouter', res.statusCode ?? 200)));
                 res.on('end', () => {
                     if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+                        this.logger.info('OpenRouter request rejected', { ...responseContext, ...failureDetails(data), responseBytes, durationMs: Date.now() - startedAt });
                         return reject(new observability_1.UpstreamResponseError(`OpenRouter API error (HTTP ${res.statusCode})`, 'OpenRouter', res.statusCode));
                     }
                     try {
                         const json = JSON.parse(data);
                         const content = json.choices?.[0]?.message?.content;
                         if (typeof content !== 'string') {
+                            this.logger.info('OpenRouter response rejected', { ...responseContext, ...failureDetails(data), failureCategory: 'missing_completion', responseBytes });
                             return reject(new observability_1.UpstreamResponseError('OpenRouter response did not contain message content', 'OpenRouter', res.statusCode ?? 200));
                         }
                         resolve(content.trim());
                     }
                     catch (err) {
+                        this.logger.info('OpenRouter response rejected', { ...responseContext, failureCategory: 'invalid_json', responseBytes });
                         reject(new observability_1.UpstreamResponseError('Failed to parse OpenRouter response', 'OpenRouter', res.statusCode ?? 200));
                     }
                 });
@@ -88,7 +147,7 @@ class OpenRouterClient {
                 req.destroy(new Error(`OpenRouter request timed out after ${this.timeoutMs}ms`));
             });
             req.on('error', (err) => {
-                this.logger.exception(err, 'OpenRouter network request');
+                this.logger.exception(err, 'OpenRouter network request', diagnostics);
                 reject(err);
             });
             req.write(payload);

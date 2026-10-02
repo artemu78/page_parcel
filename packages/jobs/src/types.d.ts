@@ -44,6 +44,8 @@ export interface AppSettings {
     errorListeners: number[];
     maxRequestsPerJob?: number;
     openRouterModel?: string;
+    openRouterBaseUrl?: string;
+    openRouterProxy?: string;
     pdfFormat?: string;
     raw: Record<string, string>;
 }

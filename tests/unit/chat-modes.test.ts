@@ -162,3 +162,13 @@ it('replayed free text cannot change provider after a mode switch', async () => 
   await f.send(4, '', { command: 'mode', mode: 'search' });
   await f.send(3, 'Chat prompt'); assert.equal(f.searches(), 1);
 });
+
+it('passes database reverse-proxy and forward-proxy settings to the AI client', async () => {
+  const f = setup();
+  await f.jobs.setSetting('BaseUrl', 'https://example.org/aws/api/v1');
+  await f.jobs.setSetting('Proxy', 'http://example.org:8080');
+  await f.send(1, '', { command: 'mode', mode: 'ai' });
+  await f.send(2, 'Hello');
+  assert.equal(f.prompts[0].baseUrl, 'https://example.org/aws/api/v1');
+  assert.equal(f.prompts[0].proxyUrl, 'http://example.org:8080');
+});

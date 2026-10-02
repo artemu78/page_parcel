@@ -242,8 +242,7 @@ but an idle row can retain that data until then. Restrict database access.
 AI is available to all enabled users when `OPENROUTER_API_KEY` is configured
 (`openrouter_api_key` in the deployed Lockbox secret). Missing credentials produce
 an unavailable notice without silently searching. The `Model`/`OpenRouterModel`
-setting chooses the model. Base URL and proxy use the existing client environment
-configuration; legacy BaseUrl/Proxy database entries are not read by this route.
+setting chooses the model. Base URL and forward proxy also use runtime settings; see the routing rules below.
 AI mode has no web-search tools. Prompts and recent replies go to OpenRouter and
 its selected provider, and replies go to VK; provider retention is independent of
 local context expiry. Do not log or report conversation content.
@@ -262,3 +261,48 @@ reply, and duplicate callbacks are not a durable delivery retry mechanism. After
 90 seconds a fresh prompt can acquire a new reservation. Old event hashes beyond
 the bounded deduplication window may be accepted again. Live VK, OpenRouter and
 YDB behavior must be verified separately from the mocked tests.
+
+### OpenRouter routing and diagnostics
+
+Every AI completion passes the parsed model, base URL and forward proxy from
+`JobStore.getSettings()` to the client. Keys are case-insensitive. Priority:
+
+- Base URL: `OpenRouterBaseUrl`, `BaseUrl`, `openrouter_base_url`, then client/environment
+  `OPENROUTER_BASE_URL`, then `https://openrouter.ai/api/v1`. Blank database base URLs
+  use the client fallback. The client appends `/chat/completions`.
+- Forward proxy: `OpenRouterProxy`, `Proxy`, `openrouter_proxy`, then client/environment
+  `OPENROUTER_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`, `http_proxy`.
+  An explicitly empty database proxy value disables the inherited forward proxy.
+- Model: `OpenRouterModel`, `Model`, `openrouter_model`, then the client default.
+
+Use the deployed AWS Lambda Function URL plus `/api/v1` as `BaseUrl`. This is a
+reverse proxy endpoint, not a CONNECT forward proxy: do not put a Lambda URL in
+`Proxy`. The existing client skips forward proxying for loopback targets.
+YDB settings are cached for 15 seconds; do not assume a change is immediate.
+Preserve these settings when editing chat routing. See the [AWS proxy guide](../infra/aws-proxy/README.md).
+
+`OpenRouter request` and `OpenRouter HTTP response` include `destinationHost`,
+`routing` (`direct` for `openrouter.ai`, otherwise `reverse_proxy`), `model`,
+`forwardProxyUsed`, optional `forwardProxyHost`, and a generated `openRouterRequestId`.
+Routing is a description of the configured hostname, not proof of actual AWS egress.
+Response logs include status, a format indicator, and optional validated
+`upstreamRequestId` (`x-request-id`/`request-id`) and `cloudflareRay` (`cf-ray`).
+These provider IDs are distinct from the cloud webhook request ID.
+
+Failed HTTP responses additionally log `responseBytes`, `durationMs`, a fixed
+`failureCategory`, and numeric `providerErrorCode` when present. Categories classify
+known message patterns into geography, authentication, credits, rate limits,
+content policy or model availability; unrecognized/HTML errors remain
+`upstream_rejection`. A 403 alone does not establish a geography restriction.
+Malformed completions and oversized bodies have their own fixed categories.
+Responses are capped at one MiB; upstream rejections remain Info-level
+`UpstreamResponseError` events and intentionally do not create GitHub issues.
+Actual code exceptions still use `Logger.exception` and the existing reporter.
+
+Do not log raw provider error messages or metadata: responses can echo prompts or
+contain flagged input and rejected completions. Diagnostics exclude full URLs,
+URL credentials/path/query, tokens, request headers, prompts, history, completions,
+and raw JSON/HTML bodies. Do not add these fields to GitHub reports. Verify routing
+with the hostname and flags first, then inspect the safe status/category and
+provider IDs. These logs do not by themselves prove the deployed proxy works;
+live cloud/provider verification is separate from mocked and local HTTP tests.

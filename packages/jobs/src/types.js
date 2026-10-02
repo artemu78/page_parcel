@@ -57,6 +57,11 @@ function parseSettingsMap(map) {
     errorListeners = Array.from(new Set(errorListeners));
     const modelRaw = getVal('OpenRouterModel') ?? getVal('Model') ?? getVal('openrouter_model');
     const openRouterModel = modelRaw && modelRaw.trim().length > 0 ? modelRaw.trim() : undefined;
+    const baseUrlRaw = getVal('OpenRouterBaseUrl') ?? getVal('BaseUrl') ?? getVal('openrouter_base_url');
+    const openRouterBaseUrl = baseUrlRaw?.trim() || undefined;
+    const proxyRaw = getVal('OpenRouterProxy') ?? getVal('Proxy') ?? getVal('openrouter_proxy');
+    // An explicit empty proxy disables an inherited forward proxy.
+    const openRouterProxy = proxyRaw === undefined ? undefined : proxyRaw.trim();
     const formatRaw = getVal('PdfFormat') ?? getVal('pdf_format');
     const pdfFormat = formatRaw && formatRaw.trim().length > 0 ? formatRaw.trim().toLowerCase() : undefined;
     return {
@@ -64,6 +69,8 @@ function parseSettingsMap(map) {
         errorListeners,
         maxRequestsPerJob,
         openRouterModel,
+        openRouterBaseUrl,
+        openRouterProxy,
         pdfFormat,
         raw
     };

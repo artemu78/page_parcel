@@ -73,3 +73,11 @@ console.log('Saved BaseUrl to Settings table');
 await store.destroy();
 "
 ```
+
+
+The webhook reads `BaseUrl` (or `OpenRouterBaseUrl`) from runtime settings for each
+AI completion, subject to the 15-second settings cache. Include `/api/v1` in the
+value. This Lambda endpoint is a reverse proxy; `Proxy`/`OpenRouterProxy` instead
+configures a separate forward HTTP proxy and should not contain the Lambda URL.
+See [routing diagnostics](../../docs/operations.md#openrouter-routing-and-diagnostics)
+for safe log fields and the intentional absence of GitHub issues for HTTP 403.

@@ -164,4 +164,18 @@ const index_js_2 = require("../../packages/rendering/dist/index.js");
         });
     });
 });
+(0, node_test_1.describe)('OpenRouter routing settings', () => {
+    (0, node_test_1.it)('parses aliases case-insensitively, prefers named settings, and preserves explicit proxy disable', () => {
+        const settings = (0, index_js_1.parseSettingsMap)({ baseurl: ' https://example.org/aws/api/v1/ ', PROXY: ' http://example.org:8080 ' });
+        strict_1.default.equal(settings.openRouterBaseUrl, 'https://example.org/aws/api/v1/');
+        strict_1.default.equal(settings.openRouterProxy, 'http://example.org:8080');
+        const named = (0, index_js_1.parseSettingsMap)({ OpenRouterBaseUrl: 'https://example.org/named', BaseUrl: 'https://example.org/alias',
+            OpenRouterProxy: '', Proxy: 'http://example.org:8080' });
+        strict_1.default.equal(named.openRouterBaseUrl, 'https://example.org/named');
+        strict_1.default.equal(named.openRouterProxy, '');
+        const empty = (0, index_js_1.parseSettingsMap)({ BaseUrl: '  ' });
+        strict_1.default.equal(empty.openRouterBaseUrl, undefined);
+        strict_1.default.equal(empty.openRouterProxy, undefined);
+    });
+});
 //# sourceMappingURL=settings-and-extraction.test.js.map

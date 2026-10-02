@@ -188,4 +188,13 @@ function setup(complete = async () => 'Hello', available = true) {
     await f.send(3, 'Chat prompt');
     strict_1.default.equal(f.searches(), 1);
 });
+(0, node_test_1.it)('passes database reverse-proxy and forward-proxy settings to the AI client', async () => {
+    const f = setup();
+    await f.jobs.setSetting('BaseUrl', 'https://example.org/aws/api/v1');
+    await f.jobs.setSetting('Proxy', 'http://example.org:8080');
+    await f.send(1, '', { command: 'mode', mode: 'ai' });
+    await f.send(2, 'Hello');
+    strict_1.default.equal(f.prompts[0].baseUrl, 'https://example.org/aws/api/v1');
+    strict_1.default.equal(f.prompts[0].proxyUrl, 'http://example.org:8080');
+});
 //# sourceMappingURL=chat-modes.test.js.map

@@ -236,7 +236,8 @@ export class WebhookHandler {
       }
       const settings = await this.jobStore.getSettings();
       const reply = await this.openRouterClient.complete({ prompt, history: reserved.history,
-        model: settings.openRouterModel, maxTokens: 2000,
+        model: settings.openRouterModel, baseUrl: settings.openRouterBaseUrl,
+        proxyUrl: settings.openRouterProxy, maxTokens: 2000,
         systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. В этом режиме у тебя нет доступа к веб-поиску; не утверждай, что проверил актуальные сведения в интернете.' });
       if (!reply.trim()) throw new UpstreamResponseError('Empty AI completion', 'OpenRouter', 200);
       const finished = await this.changeConversation(ownerId, state => {

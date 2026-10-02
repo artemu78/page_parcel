@@ -311,8 +311,8 @@ CREATE TABLE Settings (
 
 * **Supported Keys**:
   * `Model` (or `OpenRouterModel`): Target LLM model identifier on OpenRouter for AI chat (e.g. `google/gemini-2.5-flash`, `openai/gpt-4o-mini`). Default: `google/gemini-2.5-flash`.
-  * `Proxy` (or `OpenRouterProxy`): Optional outbound HTTP/HTTPS proxy URL (e.g. `http://user:pass@proxy-host:port`) Legacy setting; the chat client currently uses `OPENROUTER_PROXY` or standard proxy environment variables.
-  * `BaseUrl` (or `OpenRouterBaseUrl`): Optional custom API base URL for OpenRouter (e.g. a reverse proxy URL like `https://my-proxy.workers.dev/api/v1`). Legacy setting; configure `OPENROUTER_BASE_URL` in the environment. Default: `https://openrouter.ai/api/v1`.
+  * `Proxy` (or `OpenRouterProxy`): Optional forward HTTP/HTTPS proxy URL. Database settings take precedence over `OPENROUTER_PROXY` and standard proxy environment variables; an explicit empty value disables the inherited forward proxy.
+  * `BaseUrl` (or `OpenRouterBaseUrl`): API base URL, including the AWS reverse-proxy URL ending in `/api/v1`. Database settings take precedence over `OPENROUTER_BASE_URL`. Default: `https://openrouter.ai/api/v1`. See [routing and diagnostics](docs/operations.md#openrouter-routing-and-diagnostics).
   * `MaxRequestsPerJob`: Override default per-job browser navigation and resource request limit.
 
 *(Note: User roles and error notifications previously stored under `AdminID` and `ErrorListeners` have been migrated to the dedicated `Roles` table described below. The service automatically purges these legacy keys from `Settings` on startup).*
