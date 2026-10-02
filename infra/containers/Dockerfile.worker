@@ -1,13 +1,23 @@
 # syntax=docker/dockerfile:1
-FROM node:22-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS manifests
 
 WORKDIR /app
+COPY package*.json ./
+COPY apps/webhook/package.json ./apps/webhook/
+COPY apps/worker/package.json ./apps/worker/
+COPY packages/jobs/package.json ./packages/jobs/
+COPY packages/observability/package.json ./packages/observability/
+COPY packages/pdf/package.json ./packages/pdf/
+COPY packages/rendering/package.json ./packages/rendering/
+COPY packages/safe-network/package.json ./packages/safe-network/
+COPY packages/vk/package.json ./packages/vk/
 
-COPY package*.json tsconfig.json ./
+FROM manifests AS builder
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+
+COPY tsconfig.json ./
 COPY packages/ ./packages/
 COPY apps/ ./apps/
-
-RUN npm ci --ignore-scripts
 RUN npm run build
 
 # Production runtime with Chromium dependencies and fonts
@@ -23,7 +33,10 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
 
 # Install Chromium dependencies, certificates, and Cyrillic/Latin fonts
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \
     fonts-dejavu-core \
@@ -47,8 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libpango-1.0-0 \
     libcairo2 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+    libasound2
 
 # Create unprivileged pwuser (UID 10001)
 RUN groupadd -g 10001 pwuser && \
@@ -56,14 +68,17 @@ RUN groupadd -g 10001 pwuser && \
     mkdir -p /ms-playwright /tmp && \
     chown -R pwuser:pwuser /ms-playwright /tmp /app
 
-COPY package*.json ./
+COPY --from=manifests /app/ ./
+
+# Install production dependencies before copying application code.
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
+
+# Both browser consumers launch the default headless shell.
+RUN npx playwright install chromium --only-shell && \
+    chown -R pwuser:pwuser /ms-playwright
+
 COPY --from=builder --chown=pwuser:pwuser /app/packages/ ./packages/
 COPY --from=builder --chown=pwuser:pwuser /app/apps/ ./apps/
-
-# Install dependencies and download Chromium binary (without pulling redundant X11/xvfb tools via apt)
-RUN npm ci --omit=dev --ignore-scripts && \
-    npx playwright install chromium && \
-    chown -R pwuser:pwuser /ms-playwright
 
 USER pwuser
 

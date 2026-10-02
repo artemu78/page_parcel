@@ -306,3 +306,21 @@ and raw JSON/HTML bodies. Do not add these fields to GitHub reports. Verify rout
 with the hostname and flags first, then inspect the safe status/category and
 provider IDs. These logs do not by themselves prove the deployed proxy works;
 live cloud/provider verification is separate from mocked and local HTTP tests.
+
+## Container build caching
+
+Both Dockerfiles copy root and workspace dependency manifests into a separate
+stage before installing dependencies. Source-only changes reuse dependency
+installation; the worker also reuses its browser installation layer. When adding
+a workspace, add its package manifest COPY to both Dockerfiles.
+
+BuildKit cache mounts retain npm downloads and apt metadata/packages on the
+builder, outside the final image. Debian's automatic apt archive cleanup is
+disabled so those downloads can be reused. First builds still need downloads;
+cache pruning or switching builders removes the benefit. Base-image updates
+still rebuild dependent layers. Keep refreshing the base image and dependencies
+for security updates.
+
+The worker installs only Chromium's headless shell, matching both current
+headless launches without a browser channel. A future headed launch or explicit
+Chromium channel requires revisiting that installation.
