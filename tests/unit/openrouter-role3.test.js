@@ -93,12 +93,13 @@ const openrouter_js_1 = require("../../apps/webhook/dist/openrouter.js");
             });
             const reply = await client.complete({
                 prompt: 'Tell me something',
-                model: 'custom/model-abc'
+                model: 'custom/model-abc',
+                history: [{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }]
             });
             strict_1.default.equal(reply, 'Response from mock LLM');
             strict_1.default.equal(capturedAuth, 'Bearer test-api-key-123');
             strict_1.default.equal(capturedBody.model, 'custom/model-abc');
-            strict_1.default.deepEqual(capturedBody.messages, [{ role: 'user', content: 'Tell me something' }]);
+            strict_1.default.deepEqual(capturedBody.messages, [{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }, { role: 'user', content: 'Tell me something' }]);
         }
         finally {
             await new Promise((resolve) => mockServer.close(() => resolve()));

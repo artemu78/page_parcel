@@ -1,5 +1,6 @@
 import { loadEnvFile } from "node:process";
 import { readFileSync } from "node:fs";
+import { createModeKeyboard } from "@readable-web/vk";
 import { randomInt } from "node:crypto";
 import { Logger, UpstreamResponseError } from "@readable-web/observability";
 
@@ -9,13 +10,20 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
     console.log(
-      "Usage: npm run vk:preview -- [response.json] [--dry-run]\nLoads .env. Requires VK_GROUP_TOKEN and VK_PREVIEW_PEER_ID to send.",
+      "Usage: npm run vk:preview -- [response.json] [--mode search|ai] [--dry-run]\n--mode previews the persistent mode buttons (replaces the supplied keyboard).\nLoads .env. Requires VK_GROUP_TOKEN and VK_PREVIEW_PEER_ID to send.",
     );
     return;
   }
-  if (args.some((arg) => arg.startsWith("-") && arg !== "--dry-run"))
+  const modeIndex = args.indexOf("--mode");
+  const mode = modeIndex >= 0 ? args[modeIndex + 1] : undefined;
+  if (modeIndex >= 0 && mode !== "search" && mode !== "ai")
+    throw new Error("Use --mode search or --mode ai.");
+  if (args.filter(arg => arg === "--mode").length > 1)
+    throw new Error("Supply --mode only once.");
+  const remainingArgs = args.filter((_, index) => modeIndex < 0 || (index !== modeIndex && index !== modeIndex + 1));
+  if (remainingArgs.some((arg) => arg.startsWith("-") && arg !== "--dry-run"))
     throw new Error("Unknown option. Use --help.");
-  const files = args.filter((arg) => !arg.startsWith("-"));
+  const files = remainingArgs.filter((arg) => !arg.startsWith("-"));
   if (files.length > 1) throw new Error("Supply only one response JSON file.");
   try {
     loadEnvFile(".env");
@@ -23,9 +31,9 @@ async function main(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  const response: unknown = JSON.parse(
-    readFileSync(files[0] ?? "examples/vk-response.json", "utf8"),
-  );
+  const response: unknown = mode && !files[0]
+    ? { message: mode === "ai" ? "💬 Чат с ИИ включён. Что обсудим?" : "🔎 Поиск включён. Что найти?" }
+    : JSON.parse(readFileSync(files[0] ?? "examples/vk-response.json", "utf8"));
   if (!response || typeof response !== "object" || Array.isArray(response))
     throw new Error("Response must be a JSON object.");
   const fields = response as Record<string, unknown>;
@@ -57,6 +65,7 @@ async function main(): Promise<void> {
       params.set(key, value);
     }
   }
+  if (mode === "search" || mode === "ai") params.set("keyboard", createModeKeyboard(mode));
   if (!params.get("message")?.trim() && !params.get("attachment")?.trim())
     throw new Error("Provide message text or an existing VK attachment.");
   const peerId = Number(process.env.VK_PREVIEW_PEER_ID);

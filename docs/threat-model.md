@@ -148,3 +148,17 @@ omitted; selection uses the full existing safe PDF fetch path. Pagination checks
 owner, peer and age. Separate serializable admission prevents concurrent searches
 from bypassing the 30-second limit. Provider quotas, credit exhaustion and service availability remain operational
 risks. The API key is read from the environment/Lockbox and is never logged.
+
+## AI conversation boundary
+
+Only enabled users in private dialogs can change modes or submit AI prompts.
+Mode is an explicit user selection; search remains the initial default. AI prompts
+and recent conversation history are sent to OpenRouter and the selected model
+provider. No web-fetching tools or credentials are included in model messages.
+AI output is sent as plain VK message text and never interpreted as bot commands.
+Context is bounded and excluded after 24 hours, but the non-TTL conversation row
+can retain idle history until its next mutation. «Новый разговор» clears context
+and fences pending completions. Application logs and GitHub reports must not
+include prompts or completions. Provider and VK retention are independent.
+Per-user quotas, reservations and bounded event deduplication reduce repeated
+provider calls; delivery remains best-effort as described in operations.

@@ -165,7 +165,7 @@ deployment with the configured token.
 
 ## 7. Serper search
 
-Ordinary non-command text (up to 500 characters) searches Google via the third-party
+In search mode, ordinary non-command text (up to 500 characters) searches Google via the third-party
 Serper API (`POST https://google.serper.dev/search`, `num: 20`, `hl: ru`).
 Set `SERPER_API_KEY` locally, or add `serper_api_key` to the selected Lockbox secret
 version for deployment; Terraform injects it into the webhook only. Keep all
@@ -221,3 +221,44 @@ Serper integration is tested with mocked JSON responses, including authenticatio
 quota failures, malformed responses, result filtering and cached pagination.
 Successful live Serper search requires a configured key and remains unverified.
 No cloud deployment was performed.
+
+## 8. Chat modes
+
+Persistent text buttons select `search` (default) or `ai`; selected buttons use a
+checkmark and primary color. AI mode also offers «Новый разговор». Inline PDF,
+status and pagination buttons continue to operate independently of the selected
+mode. Replies carry search/AI headings. VK bot keyboards must be enabled in the
+community; error 912 falls back to text, so the visual switch is unavailable until
+the community setting is fixed.
+
+Webhook startup initializes `conversations` (`owner_id Int64` primary key,
+`version Int64`, `data Utf8`). JSON contains mode, bounded context, up to 100 recent
+mode/free-text event hashes, and a pending AI reservation. Serializable version-checked
+writes avoid lost updates across instances. Mode survives restart in YDB; local
+memory mode resets on restart. This table has no native TTL: context older than
+24 hours is excluded from prompts and cleared on the next successful mutation,
+but an idle row can retain that data until then. Restrict database access.
+
+AI is available to all enabled users when `OPENROUTER_API_KEY` is configured
+(`openrouter_api_key` in the deployed Lockbox secret). Missing credentials produce
+an unavailable notice without silently searching. The `Model`/`OpenRouterModel`
+setting chooses the model. Base URL and proxy use the existing client environment
+configuration; legacy BaseUrl/Proxy database entries are not read by this route.
+AI mode has no web-search tools. Prompts and recent replies go to OpenRouter and
+its selected provider, and replies go to VK; provider retention is independent of
+local context expiry. Do not log or report conversation content.
+
+Input is limited to 4000 characters; context to 12 recent user/assistant pairs and
+24000 characters. Generation requests use `max_tokens: 2000`, and replies are
+split into chunks below 4000 characters, each marked «💬 Ответ ИИ». AI requests
+share the existing per-user minute quota with PDF requests; search keeps its own
+30-second cooldown. One AI request per user can be pending for 90 seconds.
+Duplicate accepted AI events within the last 100 mode/free-text events do not call the
+provider again. Reset clears pending state, fencing late replies; changing mode
+preserves context and does not let a pending reply overwrite the selected mode.
+
+Replies remain best-effort: a process interruption after reservation can lose a
+reply, and duplicate callbacks are not a durable delivery retry mechanism. After
+90 seconds a fresh prompt can acquire a new reservation. Old event hashes beyond
+the bounded deduplication window may be accepted again. Live VK, OpenRouter and
+YDB behavior must be verified separately from the mocked tests.

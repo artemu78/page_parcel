@@ -33,6 +33,7 @@ class OpenRouterClient {
         if (params.systemPrompt) {
             messages.push({ role: 'system', content: params.systemPrompt });
         }
+        messages.push(...(params.history ?? []));
         messages.push({ role: 'user', content: params.prompt });
         const payload = JSON.stringify({
             model,

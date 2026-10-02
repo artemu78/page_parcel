@@ -9,7 +9,10 @@ const vk_1 = require("@readable-web/vk");
 const safe_network_1 = require("@readable-web/safe-network");
 const observability_2 = require("@readable-web/observability");
 const commands_js_1 = require("./commands.js");
+const openrouter_js_1 = require("./openrouter.js");
 class WebhookHandler {
+    conversationStore;
+    openRouterClient;
     searchStore;
     searchClient;
     jobStore;
@@ -19,6 +22,8 @@ class WebhookHandler {
     logger;
     maxRequestsPerMinute;
     constructor(options) {
+        this.conversationStore = options.conversationStore ?? new jobs_1.MemoryConversationStore();
+        this.openRouterClient = options.openRouterClient;
         this.searchStore = options.searchStore ?? new jobs_1.MemorySearchStore();
         this.searchClient = options.searchClient ?? new search_js_1.SerperClient();
         this.jobStore = options.jobStore;
@@ -71,12 +76,34 @@ class WebhookHandler {
             return;
         }
         const command = (0, commands_js_1.parseCommand)(text, msg.payload);
+        const eventId = (0, node_crypto_1.createHash)('sha256').update(`${fromId}:${event.event_id || `msg_${peerId}_${msg.id}`}`).digest('hex');
         if (!user && command.type === 'unrecognized' && text.trim() && !text.trim().startsWith('/')) {
             await this.sendReply(peerId, commands_js_1.GREETING_MESSAGE, `welcome_${fromId}`);
         }
         if (command.type !== 'read')
             await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`);
         switch (command.type) {
+            case 'mode':
+            case 'new-chat': {
+                const updated = await this.changeConversation(fromId, state => {
+                    if (state.recentEvents.includes(eventId))
+                        return false;
+                    state.recentEvents = [...state.recentEvents, eventId].slice(-100);
+                    if (command.type === 'mode')
+                        state.mode = command.mode;
+                    else {
+                        state.mode = 'ai';
+                        state.history = [];
+                        state.historyUpdatedAt = 0;
+                        delete state.pending;
+                    }
+                    return true;
+                });
+                if (updated)
+                    await this.sendReply(peerId, command.type === 'new-chat' ? '💬 Новый разговор начат. Что обсудим?' :
+                        command.mode === 'ai' ? '💬 Чат с ИИ включён. Что обсудим?' : '🔎 Поиск включён. Что найти?', `mode_${eventId}`);
+                break;
+            }
             case 'start':
                 await this.sendReply(peerId, commands_js_1.GREETING_MESSAGE, `start_${msg.id}`);
                 break;
@@ -122,10 +149,108 @@ class WebhookHandler {
                     await this.sendReply(peerId, commands_js_1.HELP_MESSAGE, `unrec_${msg.id}`);
                 }
                 else {
-                    await this.handleSearch(peerId, fromId, text.trim(), event.event_id || `msg_${peerId}_${msg.id}`);
+                    const state = await this.conversationStore.get(fromId);
+                    if (state.mode === 'ai') {
+                        await this.handleAiChat(peerId, fromId, text.trim(), eventId);
+                    }
+                    else {
+                        const admitted = await this.changeConversation(fromId, current => {
+                            if (current.recentEvents.includes(eventId))
+                                return false;
+                            current.recentEvents = [...current.recentEvents, eventId].slice(-100);
+                            return true;
+                        });
+                        if (!admitted)
+                            break;
+                        if (state.version === 0 && user)
+                            await this.sendReply(peerId, '🔎 Поиск включён. Что найти?', `initial_mode_${eventId}`);
+                        await this.handleSearch(peerId, fromId, text.trim(), event.event_id || `msg_${peerId}_${msg.id}`);
+                    }
                 }
                 break;
             }
+        }
+    }
+    /** Serializable CAS retries keep mode changes independent of pending AI replies. */
+    async changeConversation(ownerId, change) {
+        for (let attempt = 0; attempt < 10; attempt++) {
+            const state = await this.conversationStore.get(ownerId);
+            if (state.historyUpdatedAt + jobs_1.HISTORY_TTL_MS <= Date.now())
+                state.history = [];
+            if (!change(state))
+                return null;
+            if (await this.conversationStore.compareAndSet(ownerId, state.version, state))
+                return state;
+        }
+        throw new Error('Conversation update contention');
+    }
+    async handleAiChat(peerId, ownerId, prompt, eventId) {
+        if (prompt.length > 4000) {
+            await this.sendReply(peerId, '💬 Сократите сообщение до 4000 символов.', `ai_long_${eventId}`);
+            return;
+        }
+        if (!this.openRouterClient) {
+            await this.sendReply(peerId, '💬 Чат с ИИ временно недоступен. Можно переключиться на поиск.', `ai_unavailable_${eventId}`);
+            return;
+        }
+        let busy = false;
+        const reserved = await this.changeConversation(ownerId, state => {
+            busy = false;
+            if (state.recentEvents.includes(eventId))
+                return false;
+            if (state.pending && state.pending.expiresAt > Date.now()) {
+                busy = true;
+                return false;
+            }
+            state.recentEvents = [...state.recentEvents, eventId].slice(-100);
+            state.pending = { eventId, expiresAt: Date.now() + 90000 };
+            return true;
+        });
+        if (!reserved) {
+            if (busy)
+                await this.sendReply(peerId, '💬 Дождитесь ответа ИИ, затем отправьте следующее сообщение.', `ai_busy_${eventId}`);
+            return;
+        }
+        try {
+            const rate = await this.jobStore.checkAndConsumeRateLimit(ownerId, this.maxRequestsPerMinute, 60000);
+            if (!rate.allowed) {
+                await this.sendReply(peerId, `💬 Слишком много запросов. Подождите ${rate.retryAfterSeconds} сек.`, `ai_limit_${eventId}`);
+                return;
+            }
+            const settings = await this.jobStore.getSettings();
+            const reply = await this.openRouterClient.complete({ prompt, history: reserved.history,
+                model: settings.openRouterModel, maxTokens: 2000,
+                systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. В этом режиме у тебя нет доступа к веб-поиску; не утверждай, что проверил актуальные сведения в интернете.' });
+            if (!reply.trim())
+                throw new observability_2.UpstreamResponseError('Empty AI completion', 'OpenRouter', 200);
+            const finished = await this.changeConversation(ownerId, state => {
+                if (state.pending?.eventId !== eventId || state.pending.expiresAt <= Date.now())
+                    return false;
+                state.history = (0, jobs_1.trimHistory)([...reserved.history, { role: 'user', content: prompt }, { role: 'assistant', content: reply }]);
+                state.historyUpdatedAt = Date.now();
+                delete state.pending;
+                return true;
+            });
+            if (!finished)
+                return; // A reset or a newer reservation superseded this reply.
+            for (const [index, chunk] of (0, openrouter_js_1.splitMessage)(reply, 3900).entries()) {
+                await this.sendReply(peerId, `💬 Ответ ИИ\n\n${chunk}`, `ai_${eventId}_${index}`);
+            }
+        }
+        catch (error) {
+            this.logger.exception(error, 'AI chat completion failed');
+            const current = await this.conversationStore.get(ownerId);
+            if (current.pending?.eventId === eventId) {
+                await this.sendReply(peerId, '💬 Не удалось получить ответ ИИ. Попробуйте позже.', `ai_failed_${eventId}`);
+            }
+        }
+        finally {
+            await this.changeConversation(ownerId, state => {
+                if (state.pending?.eventId !== eventId)
+                    return false;
+                delete state.pending;
+                return true;
+            });
         }
     }
     async greetAllowedUser(userId, eventId) {
@@ -263,6 +388,7 @@ class WebhookHandler {
         if (!this.vkClient)
             return;
         try {
+            keyboard ??= (0, vk_1.createModeKeyboard)((await this.conversationStore.get(peerId)).mode);
             const randomId = (0, vk_1.generateStableRandomId)(seed);
             await this.vkClient.sendMessage({
                 peerId,

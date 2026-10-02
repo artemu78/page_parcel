@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.YdbJobStore = void 0;
+const conversation_store_js_1 = require("./conversation-store.js");
 const search_store_js_1 = require("./search-store.js");
 const exception_outbox_js_1 = require("./exception-outbox.js");
 const observability_1 = require("@readable-web/observability");
@@ -31,6 +32,7 @@ class YdbJobStore {
             this.isOwnedDriver = true;
         }
     }
+    conversationStore() { return new conversation_store_js_1.YdbConversationStore(this.driver); }
     searchStore() { return new search_store_js_1.YdbSearchStore(this.driver); }
     exceptionOutbox() { return new exception_outbox_js_1.YdbExceptionOutbox(this.driver); }
     async init() {

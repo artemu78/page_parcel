@@ -1,6 +1,6 @@
 import { defaultLogger, configureExceptionReporting, installRuntimeExceptionHandlers, flushExceptionReports } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
-import { MemorySearchStore, MemoryJobStore, YdbJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
+import { MemoryConversationStore, MemorySearchStore, MemoryJobStore, YdbJobStore, SqsQueueClient, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
 import { WebhookHandler } from './handler.js';
 import { WebhookServer } from './server.js';
 import { OpenRouterClient } from './openrouter.js';
@@ -21,6 +21,7 @@ async function bootstrap() {
 
   let jobStore;
   let searchStore;
+  let conversationStore;
   if (ydbEndpoint && ydbDatabase) {
     logger.info(`Using YdbJobStore with endpoint ${ydbEndpoint} and database ${ydbDatabase}`);
     const ydbStore = new YdbJobStore({ endpoint: ydbEndpoint, database: ydbDatabase });
@@ -30,11 +31,14 @@ async function bootstrap() {
     await ydbStore.init();
     searchStore = ydbStore.searchStore();
     await searchStore.init();
+    conversationStore = ydbStore.conversationStore();
+    await conversationStore.init();
     jobStore = ydbStore;
   } else {
     logger.warn('YDB not configured, using MemoryJobStore (local/dev mode)');
     jobStore = new MemoryJobStore();
     searchStore = new MemorySearchStore();
+    conversationStore = new MemoryConversationStore();
   }
 
   const ymqAccessKey = process.env.YMQ_ACCESS_KEY;
@@ -80,6 +84,7 @@ async function bootstrap() {
     jobStore,
     outboxService,
     searchStore,
+    conversationStore,
     vkClient,
     openRouterClient,
     validationOptions: {

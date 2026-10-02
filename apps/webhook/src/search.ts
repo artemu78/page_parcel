@@ -154,7 +154,7 @@ export function searchPage(
   for (let i = 0; i < flatButtons.length; i += 2)
     rows.push(flatButtons.slice(i, i + 2));
   return {
-    message: message || "Ничего не найдено. Попробуйте другой запрос.",
+    message: `🔎 Результаты поиска\n\n${message || "Ничего не найдено. Попробуйте другой запрос."}`,
     keyboard: JSON.stringify({ inline: true, buttons: rows }),
   };
 }

@@ -78,7 +78,7 @@ const results = Array.from({ length: 20 }, (_, i) => ({ title: `Title ${i}`, url
     strict_1.default.ok(replies.at(-1).message.includes('через'));
     await send(3, 'Ещё', more);
     strict_1.default.equal(calls, 1);
-    strict_1.default.ok(replies.at(-1).message.startsWith('8.'));
+    strict_1.default.ok(replies.at(-1).message.includes('8. Title 7'));
     await send(4, 'Ещё', more, 43);
     strict_1.default.ok(replies.at(-1).message.includes('недоступна'));
     await send(5, 'read', keyboard.buttons.flat()[0].action.payload);

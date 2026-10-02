@@ -169,3 +169,14 @@ requests use a fixed provider endpoint; result URLs are never fetched by the
 search parser. Inline selection dispatches the existing `/read` pipeline, which
 preserves URL policy, job leases, outbox, and attachment checkpoints.
 See [operations](operations.md#7-serper-search) for schema and failure limits.
+
+## Explicit chat modes
+
+The webhook routes ordinary private messages using a per-user `ConversationStore`.
+Persistent controls select search or AI; inline result actions still enter the
+existing PDF/search pipeline. Production stores mode and bounded context in YDB
+`conversations`; local mode uses memory. Version checks serialize reservations,
+mode changes and context resets. The existing OpenRouter client accepts recent
+user/assistant history and the configured model. AI chat does not invoke fetching,
+PDF generation or web search. See [operations](operations.md#8-chat-modes) for
+retention and best-effort delivery limits.

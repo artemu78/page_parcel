@@ -15,6 +15,7 @@ export interface OpenRouterClientOptions {
 
 export interface OpenRouterCompletionParams {
   prompt: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   model?: string;
   systemPrompt?: string;
   maxTokens?: number;
@@ -48,6 +49,7 @@ export class OpenRouterClient {
     if (params.systemPrompt) {
       messages.push({ role: 'system', content: params.systemPrompt });
     }
+    messages.push(...(params.history ?? []));
     messages.push({ role: 'user', content: params.prompt });
 
     const payload = JSON.stringify({

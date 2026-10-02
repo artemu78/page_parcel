@@ -62,13 +62,14 @@ describe('OpenRouterClient', () => {
 
       const reply = await client.complete({
         prompt: 'Tell me something',
-        model: 'custom/model-abc'
+        model: 'custom/model-abc',
+        history: [{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }]
       });
 
       assert.equal(reply, 'Response from mock LLM');
       assert.equal(capturedAuth, 'Bearer test-api-key-123');
       assert.equal(capturedBody.model, 'custom/model-abc');
-      assert.deepEqual(capturedBody.messages, [{ role: 'user', content: 'Tell me something' }]);
+      assert.deepEqual(capturedBody.messages, [{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }, { role: 'user', content: 'Tell me something' }]);
     } finally {
       await new Promise<void>((resolve) => mockServer.close(() => resolve()));
     }

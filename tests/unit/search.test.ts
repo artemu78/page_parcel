@@ -64,7 +64,7 @@ it('search flow persists results, more bypasses limit, rejects cross-user cache 
   assert.equal((await searches.get(id))?.query, 'query');
   await send(1, 'query'); assert.equal(calls, 1);
   await send(2, 'another query'); assert.equal(calls, 1); assert.ok(replies.at(-1).message.includes('через'));
-  await send(3, 'Ещё', more); assert.equal(calls, 1); assert.ok(replies.at(-1).message.startsWith('8.'));
+  await send(3, 'Ещё', more); assert.equal(calls, 1); assert.ok(replies.at(-1).message.includes('8. Title 7'));
   await send(4, 'Ещё', more, 43); assert.ok(replies.at(-1).message.includes('недоступна'));
   await send(5, 'read', keyboard.buttons.flat()[0].action.payload); assert.ok(replies.at(-1).message.includes('Готовим'));
 });

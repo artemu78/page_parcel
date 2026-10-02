@@ -12,6 +12,10 @@ function parseCommand(text, payload) {
             if (data && typeof data === 'object') {
                 if (data.command === 'search-read' && typeof data.searchId === 'string' && Number.isInteger(data.index) && data.index >= 0 && data.index < 20)
                     return { type: 'search-read', searchId: data.searchId, index: data.index };
+                if (data.command === 'mode' && (data.mode === 'search' || data.mode === 'ai'))
+                    return { type: 'mode', mode: data.mode };
+                if (data.command === 'new-chat')
+                    return { type: 'new-chat' };
                 if (data.command === 'start')
                     return { type: 'start' };
                 if (data.command === 'read' && typeof data.url === 'string')
@@ -34,6 +38,12 @@ function parseCommand(text, payload) {
         }
     }
     const trimmed = text.trim();
+    if (/^(?:✅\s*)?🔎\s*Поиск$/u.test(trimmed))
+        return { type: 'mode', mode: 'search' };
+    if (/^(?:✅\s*)?💬\s*Чат с ИИ$/u.test(trimmed))
+        return { type: 'mode', mode: 'ai' };
+    if (trimmed === 'Новый разговор')
+        return { type: 'new-chat' };
     if (/^(?:\/start|начать)$/i.test(trimmed))
         return { type: 'start' };
     if (/^\/help\b/i.test(trimmed) || trimmed === '?' || trimmed.toLowerCase() === 'помощь') {
@@ -64,10 +74,12 @@ function formatVersionMessage() {
     const env = process.env.NODE_ENV || 'development';
     return `📦 Версия сервиса Readable Web: ${version}\n⚙️ Среда: ${env} (${nodeVersion})`;
 }
-exports.GREETING_MESSAGE = 'Привет! Я ищу веб-страницы и помогаю читать их во ВКонтакте. Напишите, что ищете, — я предложу ссылки. Выберите страницу кнопкой, и я пришлю её PDF-версию.';
+exports.GREETING_MESSAGE = 'Привет! Я ищу веб-страницы и помогаю читать их во ВКонтакте. Напишите, что ищете, — я предложу ссылки. Выберите страницу кнопкой, и я пришлю её PDF-версию. Режимы «🔎 Поиск» и «💬 Чат с ИИ» переключаются кнопками под полем сообщения.';
 exports.HELP_MESSAGE = `🤖 Бот «Readable Web» (Удобное чтение)
 
-Напишите поисковый запрос — я найду ссылки через Serper. Выберите страницу кнопкой, чтобы получить PDF. «Ещё» показывает следующие результаты. Новый поиск доступен раз в 30 секунд.
+Выберите «🔎 Поиск» или «💬 Чат с ИИ» кнопками под полем сообщения. Выбор сохраняется. В чате кнопка «Новый разговор» очищает контекст.
+
+В режиме поиска напишите запрос — я найду ссылки через Serper. Выберите страницу кнопкой, чтобы получить PDF. «Ещё» показывает следующие результаты. Новый поиск доступен раз в 30 секунд.
 
 Я преобразую веб-статьи и открытую документацию в чистые, удобные для чтения PDF-документы.
 

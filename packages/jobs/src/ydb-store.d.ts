@@ -1,3 +1,4 @@
+import { YdbConversationStore } from './conversation-store.js';
 import { YdbSearchStore } from './search-store.js';
 import { YdbExceptionOutbox } from './exception-outbox.js';
 import { Driver } from 'ydb-sdk';
@@ -16,6 +17,7 @@ export declare class YdbJobStore implements JobStore {
     private roleUsersCache;
     private roleUsersCacheTtlMs;
     constructor(options: YdbJobStoreOptions);
+    conversationStore(): YdbConversationStore;
     searchStore(): YdbSearchStore;
     exceptionOutbox(): YdbExceptionOutbox;
     init(): Promise<void>;

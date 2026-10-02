@@ -21,4 +21,5 @@ __exportStar(require("./outbox.js"), exports);
 __exportStar(require("./ydb-store.js"), exports);
 __exportStar(require("./exception-outbox.js"), exports);
 __exportStar(require("./search-store.js"), exports);
+__exportStar(require("./conversation-store.js"), exports);
 //# sourceMappingURL=index.js.map

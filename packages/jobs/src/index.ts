@@ -6,3 +6,4 @@ export * from './ydb-store.js';
 export * from './exception-outbox.js';
 
 export * from './search-store.js';
+export * from './conversation-store.js';

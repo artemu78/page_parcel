@@ -7,7 +7,8 @@ Production-minded MVP of a VK community bot that converts public web articles an
 ## 1. Product Purpose & Scope
 
 * **User Interaction:**
-  * Send a search query as ordinary text: Serper results arrive with inline PDF buttons, seven per message and up to 20 per query. «Ещё» pages through cached results. Searches are limited to one per user every 30 seconds.
+  * Switch between **🔎 Поиск** and **💬 Чат с ИИ** using persistent buttons below the message field. The selected mode has a checkmark and highlight; search is the initial default. AI mode keeps recent context across switches, and **Новый разговор** clears it.
+  * In search mode, send a query as ordinary text: Serper results arrive with inline PDF buttons, seven per message and up to 20 per query. «Ещё» pages through cached results. Searches are limited to one per user every 30 seconds.
   * `/start` or «Начать»: short Russian introduction. The first free-text query and `message_allow` callback also trigger a greeting.
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
@@ -152,10 +153,24 @@ Each run sends a new message. The response file accepts `message`, `attachment`,
 `keyboard`, `template`, `dont_parse_links`, and `disable_mentions`; keyboards and
 templates are JSON objects. Attachments must already exist in VK; this script
 does not upload files. VK validates button/template details. Errors are reported
-without silently removing keyboards. Enable the community's bot capabilities
+without silently removing keyboards. To preview the persistent mode controls directly:
+
+```bash
+npm run vk:preview -- --mode search
+npm run vk:preview -- --mode ai
+# Inspect the payload without sending:
+npm run vk:preview -- --mode ai --dry-run
+```
+
+`--mode` uses the application's shared keyboard builder. With a response JSON file,
+it replaces that response's keyboard; without a file, it sends a mode confirmation.
+This sends a visual preview only: tapping buttons requires the updated webhook to
+be deployed for mode switching and AI responses.
+
+Enable the community's bot capabilities
 if VK rejects keyboards with error 912.
 
-The example uses a link button. Text or callback buttons need their own handlers;
+The example uses a callback button. Text or callback buttons need their own handlers;
 clicking text buttons can invoke the deployed bot's normal command flow. This
 sender previews messages, not the incoming-event or PDF processing pipeline.
 
@@ -274,7 +289,7 @@ Once Terraform creates the secret `readable-web-vk-secrets`:
    - Key: `vk_secret` → Value: *(your Callback API secret)*
    - Key: `vk_confirmation_code` → Value: *(your Callback API confirmation string)*
    - Key: `vk_group_token` → Value: *(your VK Community Access Token)*
-   - Key: `openrouter_api_key` → Value: *(your OpenRouter API Key for Role 3 text model)*
+   - Key: `openrouter_api_key` → Value: *(your OpenRouter API key for AI chat)*
    - Key: `github_token` → Value: *(fine-grained GitHub token with Issues read/write access to the reporting repository)*
 4. Click **Save**. Check the secret-version references in Terraform and deploy revisions that use the intended version; saving a secret version alone is not evidence that running containers use it.
 
@@ -295,9 +310,9 @@ CREATE TABLE Settings (
 ```
 
 * **Supported Keys**:
-  * `Model` (or `OpenRouterModel`): Target LLM model identifier on OpenRouter for Role 3 chat (e.g. `google/gemini-2.5-flash`, `openai/gpt-4o-mini`). Default: `google/gemini-2.5-flash`.
-  * `Proxy` (or `OpenRouterProxy`): Optional outbound HTTP/HTTPS proxy URL (e.g. `http://user:pass@proxy-host:port`) used by the webhook to bypass geo-restrictions when connecting to OpenRouter.
-  * `BaseUrl` (or `OpenRouterBaseUrl`): Optional custom API base URL for OpenRouter (e.g. a reverse proxy URL like `https://my-proxy.workers.dev/api/v1`). Default: `https://openrouter.ai/api/v1`.
+  * `Model` (or `OpenRouterModel`): Target LLM model identifier on OpenRouter for AI chat (e.g. `google/gemini-2.5-flash`, `openai/gpt-4o-mini`). Default: `google/gemini-2.5-flash`.
+  * `Proxy` (or `OpenRouterProxy`): Optional outbound HTTP/HTTPS proxy URL (e.g. `http://user:pass@proxy-host:port`) Legacy setting; the chat client currently uses `OPENROUTER_PROXY` or standard proxy environment variables.
+  * `BaseUrl` (or `OpenRouterBaseUrl`): Optional custom API base URL for OpenRouter (e.g. a reverse proxy URL like `https://my-proxy.workers.dev/api/v1`). Legacy setting; configure `OPENROUTER_BASE_URL` in the environment. Default: `https://openrouter.ai/api/v1`.
   * `MaxRequestsPerJob`: Override default per-job browser navigation and resource request limit.
 
 *(Note: User roles and error notifications previously stored under `AdminID` and `ErrorListeners` have been migrated to the dedicated `Roles` table described below. The service automatically purges these legacy keys from `Settings` on startup).*
@@ -342,7 +357,7 @@ CREATE TABLE Roles (
 * **Supported Roles**:
   * **Role `1` (`Admin`)**: Service administrator.
   * **Role `2` (`ErrorListeners`)**: Users who receive real-time error notifications in VK direct messages.
-  * **Role `3` (`AiChat`)**: Legacy role; ordinary messages now trigger Serper search for all enabled users. OpenRouter client/settings remain available for existing integrations but are no longer routed from free text.
+  * **Role `3` (`AiChat`)**: Legacy role; no longer controls AI access. All enabled users can select AI chat with the mode buttons. Ordinary messages route to the explicitly selected mode.
 
 *(Note: Target VK users must have initiated at least one conversation with the VK bot / community so that VK API allows sending direct messages).*
 
@@ -403,3 +418,5 @@ UPDATE Users SET Status = 0 WHERE ID = 123456789;
 ### Search onboarding and storage
 
 See [search operations](docs/operations.md#7-serper-search) for VK onboarding setup, query-log schema, retention, rate limits, and provider limitations.
+
+See [chat mode operations](docs/operations.md#8-chat-modes) for persistence, context limits, credentials and delivery limitations.

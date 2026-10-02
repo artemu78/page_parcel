@@ -9,6 +9,10 @@ export interface OpenRouterClientOptions {
 }
 export interface OpenRouterCompletionParams {
     prompt: string;
+    history?: Array<{
+        role: 'user' | 'assistant';
+        content: string;
+    }>;
     model?: string;
     systemPrompt?: string;
     maxTokens?: number;

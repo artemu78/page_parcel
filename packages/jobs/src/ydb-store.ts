@@ -1,3 +1,4 @@
+import { YdbConversationStore } from './conversation-store.js';
 import { YdbSearchStore } from './search-store.js';
 import { YdbExceptionOutbox } from './exception-outbox.js';
 import { defaultLogger } from '@readable-web/observability';
@@ -36,6 +37,8 @@ export class YdbJobStore implements JobStore {
       this.isOwnedDriver = true;
     }
   }
+
+  public conversationStore(): YdbConversationStore { return new YdbConversationStore(this.driver); }
 
   public searchStore(): YdbSearchStore { return new YdbSearchStore(this.driver); }
 
