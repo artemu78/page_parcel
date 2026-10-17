@@ -4,6 +4,9 @@ export type ParsedCommand = {
 } | {
     type: 'start';
 } | {
+    type: 'model';
+    model?: string;
+} | {
     type: 'mode';
     mode: 'search' | 'ai';
 } | {

@@ -82,7 +82,7 @@ if [[ "$TARGET" == "webhook" || "$TARGET" == "all" ]]; then
   echo ""
   echo "🔨 [1/2] Building Webhook Container (linux/amd64)..."
   BUILD_WH_START=$(date +%s)
-  docker build --platform linux/amd64 \
+  docker build --platform linux/amd64 --provenance=false \
     -t "cr.yandex/$REGISTRY_ID/webhook:$TAG" \
     -t "cr.yandex/$REGISTRY_ID/webhook:latest" \
     -f infra/containers/Dockerfile.webhook .
@@ -105,7 +105,7 @@ if [[ "$TARGET" == "worker" || "$TARGET" == "all" ]]; then
   echo ""
   echo "🔨 [2/2] Building Worker Container (linux/amd64)..."
   BUILD_WRK_START=$(date +%s)
-  docker build --platform linux/amd64 \
+  docker build --platform linux/amd64 --provenance=false \
     -t "cr.yandex/$REGISTRY_ID/worker:$TAG" \
     -t "cr.yandex/$REGISTRY_ID/worker:latest" \
     -f infra/containers/Dockerfile.worker .

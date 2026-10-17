@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.BrowserManager = void 0;
 const playwright_1 = require("playwright");
 const observability_1 = require("@readable-web/observability");
+const images_js_1 = require("./images.js");
 const extractor_js_1 = require("./extractor.js");
 class BrowserManager {
     browser = null;
@@ -150,6 +151,7 @@ class BrowserManager {
             const rawHtml = await page.content();
             try {
                 const article = this.extractor.extract(rawHtml, currentUrl);
+                article.contentHtml = await (0, images_js_1.embedArticleImages)(article.contentHtml, currentUrl, context, this.logger, () => ++requestCount <= maxRequests);
                 return {
                     article,
                     finalUrl: currentUrl,

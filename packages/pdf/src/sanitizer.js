@@ -16,18 +16,20 @@ function sanitizeArticleContent(rawHtml) {
             'ul', 'ol', 'li',
             'a',
             'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
-            'hr', 'br',
+            'hr', 'br', 'img', 'figure', 'figcaption',
             'em', 'strong', 'b', 'i', 'u', 's', 'strike', 'del',
             'span', 'sub', 'sup'
         ],
         allowedAttributes: {
             a: ['href', 'title', 'rel', 'target'],
+            img: ['src', 'alt', 'title'],
             th: ['colspan', 'rowspan', 'align'],
             td: ['colspan', 'rowspan', 'align']
         },
         allowedSchemes: ['http', 'https'],
         allowedSchemesByTag: {
-            a: ['http', 'https']
+            a: ['http', 'https'],
+            img: ['data']
         },
         transformTags: {
             a: sanitize_html_1.default.simpleTransform('a', {
@@ -37,6 +39,8 @@ function sanitizeArticleContent(rawHtml) {
         },
         // Completely drop disallowed tags including their contents for dangerous elements
         exclusiveFilter: (frame) => {
+            if (frame.tag === 'img')
+                return !/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(frame.attribs.src || '') || (frame.attribs.src || '').length > 2800000;
             return ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'select'].includes(frame.tag);
         }
     });

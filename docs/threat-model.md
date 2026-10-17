@@ -98,7 +98,7 @@ It is **NOT** a proxy, VPN, interactive browser, screenshot engine, or general-p
 * **Mitigations:**
   1. **Strict HTML Sanitization:** Content passed to the reader template is filtered with `sanitize-html` against a strict allowlist (`p, h1-h6, blockquote, pre, code, ul, ol, li, a, table, thead, tbody, tr, th, td, hr, br, em, strong`).
   2. **No Dynamic Execution during PDF print:** The reader template is rendered in a Chromium context where **JavaScript is completely disabled** (`javaScriptEnabled: false`) and network access is disabled (`offline: true`).
-  3. **No External Assets in PDF:** All styles and fonts in the reader template are self-contained and bundled. No remote images or remote fonts are loaded.
+  3. **No External Assets in PDF:** All styles and fonts in the reader template are self-contained and bundled. No remote images or remote fonts are loaded during PDF printing. Article raster images are fetched beforehand through the validating proxy and embedded as data URLs; SVG is excluded. The image stage is bounded to 12 candidates, 2 MiB per embedded image, 8 MiB total and a 15-second navigation budget. Image navigation consumes the job request budget.
   4. **Safe Filename Generation:** Filenames for VK upload are synthesized (`article-<jobId>.pdf`), never derived from user input or remote `Content-Disposition`.
 
 ### 3.5 Credentials and Sensitive Data

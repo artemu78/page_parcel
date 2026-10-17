@@ -14,6 +14,8 @@ function parseCommand(text, payload) {
                     return { type: 'search-read', searchId: data.searchId, index: data.index };
                 if (data.command === 'mode' && (data.mode === 'search' || data.mode === 'ai'))
                     return { type: 'mode', mode: data.mode };
+                if (data.command === 'model' && (data.model === undefined || typeof data.model === 'string'))
+                    return { type: 'model', model: data.model };
                 if (data.command === 'new-chat')
                     return { type: 'new-chat' };
                 if (data.command === 'start')
@@ -38,6 +40,9 @@ function parseCommand(text, payload) {
         }
     }
     const trimmed = text.trim();
+    const modelMatch = trimmed.match(/^\/model(?:\s+(\S+))?$/i);
+    if (modelMatch || trimmed === 'Модель ИИ')
+        return { type: 'model', model: modelMatch?.[1] };
     if (/^(?:✅\s*)?🔎\s*Поиск$/u.test(trimmed))
         return { type: 'mode', mode: 'search' };
     if (/^(?:✅\s*)?💬\s*Чат с ИИ$/u.test(trimmed))

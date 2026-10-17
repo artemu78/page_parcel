@@ -5,6 +5,7 @@ export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface Conversation {
   version: number;
   mode: ChatMode;
+  modelKey?: string;
   history: ChatMessage[];
   historyUpdatedAt: number;
   recentEvents: string[];

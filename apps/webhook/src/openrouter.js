@@ -71,6 +71,7 @@ class OpenRouterClient {
         const payload = JSON.stringify({
             model,
             messages,
+            ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
             ...(params.maxTokens ? { max_tokens: params.maxTokens } : {})
         });
         const headers = {

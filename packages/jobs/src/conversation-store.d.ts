@@ -7,6 +7,7 @@ export interface ChatMessage {
 export interface Conversation {
     version: number;
     mode: ChatMode;
+    modelKey?: string;
     history: ChatMessage[];
     historyUpdatedAt: number;
     recentEvents: string[];

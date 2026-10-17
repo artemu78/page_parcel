@@ -40,6 +40,7 @@ export interface OpenRouterCompletionParams {
   prompt: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   model?: string;
+  reasoningEffort?: 'low';
   systemPrompt?: string;
   maxTokens?: number;
   baseUrl?: string;
@@ -78,6 +79,7 @@ export class OpenRouterClient {
     const payload = JSON.stringify({
       model,
       messages,
+      ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.maxTokens ? { max_tokens: params.maxTokens } : {})
     });
 

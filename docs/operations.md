@@ -262,9 +262,26 @@ reply, and duplicate callbacks are not a durable delivery retry mechanism. After
 the bounded deduplication window may be accepted again. Live VK, OpenRouter and
 YDB behavior must be verified separately from the mocked tests.
 
+### Per-user model selection
+
+Only VK user `10487183` can use «Модель ИИ» in AI mode or `/model`.
+Options are `/model default`, `/model sol-low` (OpenRouter `openai/gpt-6.1-sol`,
+`reasoning.effort: low`) and `/model astra` (`openai/gpt-6-astra`, provider-default
+reasoning). These two IDs and Sol low effort were listed in the public
+[OpenRouter catalog](https://openrouter.ai/api/v1/models) on 2026-10-17;
+Gemini 3.8 Flash was absent and is not offered. Catalog presence does not establish
+account credits, regional availability, or successful completion through the deployed proxy.
+
+Selection is stored as `modelKey` in existing conversation JSON (no schema change),
+preserves history, switches to AI mode, and fences pending replies. Default restores
+the current runtime model setting. The webhook checks the sender on both selection
+and generation; other users cannot select these models through forged payloads or
+saved state. If a restricted GPT family is set globally, other users use
+`google/gemini-2.5-flash`. Base URL and forward-proxy routing remain unchanged.
+
 ### OpenRouter routing and diagnostics
 
-Every AI completion passes the parsed model, base URL and forward proxy from
+Every AI completion passes the base URL and forward proxy from
 `JobStore.getSettings()` to the client. Keys are case-insensitive. Priority:
 
 - Base URL: `OpenRouterBaseUrl`, `BaseUrl`, `openrouter_base_url`, then client/environment
@@ -273,7 +290,8 @@ Every AI completion passes the parsed model, base URL and forward proxy from
 - Forward proxy: `OpenRouterProxy`, `Proxy`, `openrouter_proxy`, then client/environment
   `OPENROUTER_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy`, `http_proxy`.
   An explicitly empty database proxy value disables the inherited forward proxy.
-- Model: `OpenRouterModel`, `Model`, `openrouter_model`, then the client default.
+- Model: authorized per-user selection, then `OpenRouterModel`, `Model`,
+  `openrouter_model`, then the client default, subject to the restriction above.
 
 Use the deployed AWS Lambda Function URL plus `/api/v1` as `BaseUrl`. This is a
 reverse proxy endpoint, not a CONNECT forward proxy: do not put a Lambda URL in
@@ -307,6 +325,15 @@ with the hostname and flags first, then inspect the safe status/category and
 provider IDs. These logs do not by themselves prove the deployed proxy works;
 live cloud/provider verification is separate from mocked and local HTTP tests.
 
+## Container registry compatibility
+
+The deployment script disables BuildKit provenance attestations with
+`--provenance=false` for both single-platform `linux/amd64` images. The registry
+rejected the default attestation-bearing OCI index with `Cannot read manifest
+data`; pushing the identical application manifest without the attestation
+succeeded. Keep this flag on both builds. This omits attached build provenance;
+it does not change the application layers. See [Docker provenance options](https://docs.docker.com/reference/cli/docker/buildx/build/#provenance).
+
 ## Container build caching
 
 Both Dockerfiles copy root and workspace dependency manifests into a separate
@@ -324,3 +351,7 @@ for security updates.
 The worker installs only Chromium's headless shell, matching both current
 headless launches without a browser channel. A future headed launch or explicit
 Chromium channel requires revisiting that installation.
+
+### Article images in PDFs
+
+The worker embeds up to 12 extracted article images as raster data URLs before offline PDF printing. Supported formats are PNG, JPEG, GIF and WebP; SVG, CSS backgrounds and images outside extracted content are excluded. Image fetches use the job browser context and validating egress proxy, including redirect validation and shared proxy byte/request limits. Each embedded image is limited to 2 MiB, with an 8 MiB total embedding budget and 15-second navigation budget (up to 3 seconds per navigation). Unavailable or rejected images are omitted without failing the article. The existing 10 MiB final PDF limit still applies. Deploy the worker image to enable this behavior.

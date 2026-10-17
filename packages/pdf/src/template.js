@@ -236,6 +236,9 @@ function buildReaderHtml(data, formatting) {
       border-radius: 3px;
       font-size: ${resolved.format === 'desktop' ? '9.5pt' : '8.5pt'};
     }
+    img { max-width: 100%; max-height: 650px; height: auto; object-fit: contain; }
+    figure { margin: 12pt 0; break-inside: avoid; }
+    figcaption { font-size: 9pt; color: #64748b; }
     table {
       width: 100%;
       border-collapse: collapse;

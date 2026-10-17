@@ -14,6 +14,7 @@ export interface OpenRouterCompletionParams {
         content: string;
     }>;
     model?: string;
+    reasoningEffort?: 'low';
     systemPrompt?: string;
     maxTokens?: number;
     baseUrl?: string;

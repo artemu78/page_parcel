@@ -6,5 +6,5 @@
  */
 export declare function createStatusKeyboard(jobId: string): string;
 /** Persistent mode controls stay separate from inline result actions. */
-export declare function createModeKeyboard(mode: 'search' | 'ai'): string;
+export declare function createModeKeyboard(mode: 'search' | 'ai', modelSwitch?: boolean): string;
 //# sourceMappingURL=keyboard.d.ts.map

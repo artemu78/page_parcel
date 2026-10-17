@@ -12,12 +12,13 @@ Production-minded MVP of a VK community bot that converts public web articles an
   * `/start` or «Начать»: short Russian introduction. The first free-text query and `message_allow` callback also trigger a greeting.
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
+  * User `10487183` can choose GPT Sol 6.1 (low), GPT-6 Astra, or the default via «Модель ИИ» / `/model`. See [model selection](docs/operations.md#per-user-model-selection).
   * `/version`: Reports the running service version, git commit, build timestamp, and runtime environment.
   * `/help`: Displays service usage, capabilities, and limitations.
 * **Scope Boundaries:**
   * **Read-only web-to-PDF:** Target public articles and documentation.
   * **No bypasses:** Does not bypass paywalls, CAPTCHAs, or authentication. Never uses cookies, credentials, or sessions.
-  * **MVP Defers:** Group chats, images in PDFs, original page snapshot mode, multi-page crawling, audio/video/office file conversions.
+  * **MVP Defers:** Group chats, original page snapshot mode, multi-page crawling, audio/video/office file conversions.
 
 ---
 
@@ -420,3 +421,5 @@ UPDATE Users SET Status = 0 WHERE ID = 123456789;
 See [search operations](docs/operations.md#7-serper-search) for VK onboarding setup, query-log schema, retention, rate limits, and provider limitations.
 
 See [chat mode operations](docs/operations.md#8-chat-modes) for persistence, context limits, credentials and delivery limitations.
+
+Article PDFs include up to 12 public PNG/JPEG/GIF/WebP images from extracted content (2 MiB each, 8 MiB total, 15-second image stage). Images are fetched through the validating browser proxy and embedded for offline printing. Unsupported, unavailable, or over-budget images are omitted. SVG and CSS background images are not included.

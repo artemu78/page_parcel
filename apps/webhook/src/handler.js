@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WebhookHandler = void 0;
+const models_js_1 = require("./models.js");
 const node_crypto_1 = require("node:crypto");
 const jobs_1 = require("@readable-web/jobs");
 const search_js_1 = require("./search.js");
@@ -83,6 +84,35 @@ class WebhookHandler {
         if (command.type !== 'read')
             await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`);
         switch (command.type) {
+            case 'model': {
+                if (fromId !== models_js_1.MODEL_OWNER_ID) {
+                    await this.sendReply(peerId, 'Выбор модели недоступен.', `model_denied_${msg.id}`);
+                    break;
+                }
+                if (!command.model) {
+                    const state = await this.conversationStore.get(fromId);
+                    await this.sendReply(peerId, 'Выберите модель ИИ:', `models_${msg.id}`, (0, models_js_1.modelKeyboard)(state.modelKey));
+                    break;
+                }
+                const selected = (0, models_js_1.selectedModel)(fromId, command.model);
+                if (command.model !== 'default' && !selected) {
+                    await this.sendReply(peerId, 'Эта модель недоступна. Используйте /model.', `model_invalid_${msg.id}`);
+                    break;
+                }
+                const updated = await this.changeConversation(fromId, state => {
+                    if (state.recentEvents.includes(eventId))
+                        return false;
+                    state.recentEvents = [...state.recentEvents, eventId].slice(-100);
+                    state.modelKey = selected?.key;
+                    state.mode = 'ai';
+                    // Fence the old completion so its answer cannot arrive under a new model.
+                    delete state.pending;
+                    return true;
+                });
+                if (updated)
+                    await this.sendReply(peerId, `💬 Модель: ${selected?.label ?? 'По умолчанию'}. Контекст сохранён.`, `model_${eventId}`);
+                break;
+            }
             case 'mode':
             case 'new-chat': {
                 const updated = await this.changeConversation(fromId, state => {
@@ -218,8 +248,10 @@ class WebhookHandler {
                 return;
             }
             const settings = await this.jobStore.getSettings();
+            const selection = (0, models_js_1.selectedModel)(ownerId, reserved.modelKey);
             const reply = await this.openRouterClient.complete({ prompt, history: reserved.history,
-                model: settings.openRouterModel, baseUrl: settings.openRouterBaseUrl,
+                model: selection?.model ?? (0, models_js_1.defaultModelFor)(ownerId, settings.openRouterModel),
+                reasoningEffort: selection?.reasoningEffort, baseUrl: settings.openRouterBaseUrl,
                 proxyUrl: settings.openRouterProxy, maxTokens: 2000,
                 systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. В этом режиме у тебя нет доступа к веб-поиску; не утверждай, что проверил актуальные сведения в интернете.' });
             if (!reply.trim())
@@ -389,7 +421,7 @@ class WebhookHandler {
         if (!this.vkClient)
             return;
         try {
-            keyboard ??= (0, vk_1.createModeKeyboard)((await this.conversationStore.get(peerId)).mode);
+            keyboard ??= (0, vk_1.createModeKeyboard)((await this.conversationStore.get(peerId)).mode, peerId === models_js_1.MODEL_OWNER_ID);
             const randomId = (0, vk_1.generateStableRandomId)(seed);
             await this.vkClient.sendMessage({
                 peerId,

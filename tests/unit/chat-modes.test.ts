@@ -172,3 +172,61 @@ it('passes database reverse-proxy and forward-proxy settings to the AI client', 
   assert.equal(f.prompts[0].baseUrl, 'https://example.org/aws/api/v1');
   assert.equal(f.prompts[0].proxyUrl, 'http://example.org:8080');
 });
+
+it('owner can select verified models, persist selection, and restore the runtime default', async () => {
+  const f = setup(); const owner = 10487183;
+  await f.jobs.setSetting('Model', 'custom/default');
+  await f.jobs.setSetting('BaseUrl', 'https://example.org/api/v1');
+  await f.jobs.setSetting('Proxy', '');
+  await f.send(1, '/model', undefined, owner);
+  const menu = JSON.parse(f.replies.at(-1).keyboard);
+  assert.equal(menu.buttons.length, 3);
+  await f.send(2, '', { command: 'model', model: 'sol-low' }, owner);
+  f.restart();
+  await f.send(3, 'Hello', undefined, owner);
+  assert.equal(f.prompts[0].model, 'openai/gpt-6.1-sol');
+  assert.equal(f.prompts[0].reasoningEffort, 'low');
+  assert.equal(f.prompts[0].baseUrl, 'https://example.org/api/v1');
+  assert.equal(f.prompts[0].proxyUrl, '');
+  assert.match(f.replies.at(-1).keyboard, /Модель ИИ/);
+  await f.send(4, '/model astra', undefined, owner);
+  await f.send(2, '', { command: 'model', model: 'sol-low' }, owner);
+  await f.send(5, 'Again', undefined, owner);
+  assert.equal(f.prompts[1].model, 'openai/gpt-6-astra');
+  assert.equal(f.prompts[1].reasoningEffort, undefined);
+  assert.equal(f.prompts[1].history.length, 2);
+  await f.send(6, '/model default', undefined, owner);
+  await f.send(7, 'Default', undefined, owner);
+  assert.equal(f.prompts[2].model, 'custom/default');
+});
+
+it('restricts models at commands and generation, including forged saved selections and global defaults', async () => {
+  const f = setup();
+  for (const text of ['/model', '/model sol-low', '/model astra']) await f.send(1, text);
+  await f.send(2, '', { command: 'model', model: 'sol-low' });
+  assert.equal((await f.conversations.get(42)).modelKey, undefined);
+  assert.ok(f.replies.every(r => !r.keyboard.includes('Модель ИИ')));
+  const state = await f.conversations.get(42);
+  await f.conversations.compareAndSet(42, state.version, { ...state, mode: 'ai', modelKey: 'sol-low' });
+  await f.jobs.setSetting('Model', 'openai/gpt-6-astra');
+  await f.send(3, 'Hello');
+  assert.equal(f.prompts[0].model, 'google/gemini-2.5-flash');
+  assert.equal(f.prompts[0].reasoningEffort, undefined);
+  await f.send(1, '/model arbitrary/provider', undefined, 10487183);
+  assert.equal((await f.conversations.get(10487183)).modelKey, undefined);
+});
+
+it('model switching fences pending replies and blocked owners cannot select models', async () => {
+  let release!: (reply: string) => void;
+  const f = setup(() => new Promise(resolve => { release = resolve; })); const owner = 10487183;
+  await f.send(1, '/model sol-low', undefined, owner);
+  const pending = f.send(2, 'Hello', undefined, owner);
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  await f.send(3, '/model astra', undefined, owner);
+  release('Stale response'); await pending;
+  assert.ok(f.replies.every(r => !r.message.includes('Stale response')));
+  assert.equal((await f.conversations.get(owner)).modelKey, 'astra');
+  await f.jobs.setUserStatus(owner, 1);
+  await f.send(4, '/model sol-low', undefined, owner);
+  assert.equal((await f.conversations.get(owner)).modelKey, 'astra');
+});

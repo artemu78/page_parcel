@@ -1,5 +1,6 @@
 import { chromium, Browser, BrowserContext, Page, devices } from 'playwright';
 import { Logger, defaultLogger, UpstreamResponseError } from '@readable-web/observability';
+import { embedArticleImages } from './images.js';
 import { ContentExtractor, ContentExtractionError, ExtractedArticle } from './extractor.js';
 
 export interface RenderJobOptions {
@@ -186,6 +187,7 @@ export class BrowserManager {
 
       try {
         const article = this.extractor.extract(rawHtml, currentUrl);
+        article.contentHtml = await embedArticleImages(article.contentHtml, currentUrl, context, this.logger, () => ++requestCount <= maxRequests);
         return {
           article,
           finalUrl: currentUrl,

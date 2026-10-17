@@ -2,6 +2,7 @@ import { SEARCH_PAGE_SIZE } from './search-config.js';
 export type ParsedCommand =
   | { type: 'read'; url: string }
   | { type: 'start' }
+  | { type: 'model'; model?: string }
   | { type: 'mode'; mode: 'search' | 'ai' }
   | { type: 'new-chat' }
   | { type: 'search-read'; searchId: string; index: number }
@@ -18,6 +19,7 @@ export function parseCommand(text: string, payload?: string): ParsedCommand {
       if (data && typeof data === 'object') {
         if (data.command === 'search-read' && typeof data.searchId === 'string' && Number.isInteger(data.index) && data.index >= 0 && data.index < 20) return { type: 'search-read', searchId: data.searchId, index: data.index };
         if (data.command === 'mode' && (data.mode === 'search' || data.mode === 'ai')) return { type: 'mode', mode: data.mode };
+        if (data.command === 'model' && (data.model === undefined || typeof data.model === 'string')) return { type: 'model', model: data.model };
         if (data.command === 'new-chat') return { type: 'new-chat' };
         if (data.command === 'start') return { type: 'start' };
         if (data.command === 'read' && typeof data.url === 'string') return { type: 'read', url: data.url };
@@ -39,6 +41,8 @@ export function parseCommand(text: string, payload?: string): ParsedCommand {
   }
 
   const trimmed = text.trim();
+  const modelMatch = trimmed.match(/^\/model(?:\s+(\S+))?$/i);
+  if (modelMatch || trimmed === 'Модель ИИ') return { type: 'model', model: modelMatch?.[1] };
   if (/^(?:✅\s*)?🔎\s*Поиск$/u.test(trimmed)) return { type: 'mode', mode: 'search' };
   if (/^(?:✅\s*)?💬\s*Чат с ИИ$/u.test(trimmed)) return { type: 'mode', mode: 'ai' };
   if (trimmed === 'Новый разговор') return { type: 'new-chat' };
