@@ -40,6 +40,8 @@ function parseCommand(text, payload) {
         }
     }
     const trimmed = text.trim();
+    if (/^\/ai-status$/i.test(trimmed))
+        return { type: 'ai-status' };
     const modelMatch = trimmed.match(/^\/model(?:\s+(\S+))?$/i);
     if (modelMatch || trimmed === 'Модель ИИ')
         return { type: 'model', model: modelMatch?.[1] };
@@ -92,7 +94,7 @@ exports.HELP_MESSAGE = `🤖 Бот «Readable Web» (Удобное чтени�
 • /read <URL> — создать PDF-версию статьи
   Пример: /read https://example.org/article
 
-• /status <job-id> — узнать статус обработки вашего задания
+• /ai-status — состояние последнего запроса ИИ и код диагностики\n\n• /status <job-id> — узнать статус обработки вашего задания
 
 • /version — версия сервиса
 

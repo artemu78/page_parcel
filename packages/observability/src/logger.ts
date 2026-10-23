@@ -61,6 +61,7 @@ export class Logger {
 
   public exception(error: unknown, operation: string, context?: LogContext): void {
     const merged = { ...this.defaultContext, ...context };
+    captureException(error, operation, merged);
     const sdkStatus = error !== null && typeof error === 'object'
       ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode : undefined;
     if (typeof sdkStatus === 'number') {
@@ -71,7 +72,6 @@ export class Logger {
       this.info(operation, { ...merged, service: error.service, httpStatus: error.statusCode });
       return;
     }
-    captureException(error, operation, merged);
     this.error(operation, { ...merged, error: error instanceof Error ? error.message : String(error) });
   }
 

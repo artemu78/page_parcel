@@ -72,16 +72,18 @@ class Outbox {
     strict_1.default.equal(posts, 1);
     strict_1.default.equal(outbox.reports.size, 0);
 });
-(0, node_test_1.test)('upstream response and SDK HTTP failures stay Info, code errors report despite log threshold', async () => {
+(0, node_test_1.test)('upstream and SDK failures report despite Info logging and log threshold', async () => {
     const captures = [];
     (0, index_js_1.setExceptionReporter)({ capture: error => { captures.push(error); }, flush: async () => { } });
     try {
         const logger = new index_js_1.Logger('error').child({ service: 'webhook' });
-        logger.exception(new index_js_1.UpstreamResponseError('HTTP 429', 'OpenRouter', 429), 'Complete request');
-        logger.exception(Object.assign(new Error('HTTP 500'), { $metadata: { httpStatusCode: 500 } }), 'Publish queue');
+        const upstream = new index_js_1.UpstreamResponseError('HTTP 429', 'OpenRouter', 429);
+        const sdk = Object.assign(new Error('HTTP 500'), { $metadata: { httpStatusCode: 500 } });
+        logger.exception(upstream, 'Complete request');
+        logger.exception(sdk, 'Publish queue');
         const codeError = new TypeError('bad state');
         logger.exception(codeError, 'Handle event');
-        strict_1.default.deepEqual(captures, [codeError]);
+        strict_1.default.deepEqual(captures, [upstream, sdk, codeError]);
     }
     finally {
         (0, index_js_1.setExceptionReporter)(undefined);
@@ -197,5 +199,60 @@ class Outbox {
         else
             process.env.APP_VERSION = version;
     }
+});
+(0, node_test_1.test)('upstream rejections create one durable issue without provider messages or metadata', async () => {
+    const outbox = new Outbox();
+    const posts = [];
+    const reporter = new index_js_1.GitHubExceptionReporter({ token: 'token', repository: 'owner/repo', outbox,
+        fetch: (async (_url, init) => {
+            if (init?.method === 'POST') {
+                posts.push(JSON.parse(String(init.body)));
+                return new Response('{}', { status: 503 });
+            }
+            return new Response('[]');
+        }) });
+    const upstream = new index_js_1.UpstreamResponseError('PRIVATE PROMPT AND PROVIDER BODY', 'OpenRouter', 403);
+    reporter.capture(upstream, 'AI chat completion failed', { service: 'webhook', requestId: 'event-123' });
+    reporter.capture(upstream, 'Parent catch', {});
+    await reporter.flush();
+    strict_1.default.equal(posts.length, 1);
+    strict_1.default.equal(outbox.reports.size, 1);
+    strict_1.default.match(posts[0].body, /403/);
+    strict_1.default.match(posts[0].body, /OpenRouter/);
+    strict_1.default.match(posts[0].body, /event-123/);
+    strict_1.default.doesNotMatch(JSON.stringify([...outbox.reports.values()]), /PRIVATE PROMPT AND PROVIDER BODY/);
+    const sdk = (0, index_js_1.buildExceptionReport)(Object.assign(new Error('PRIVATE SDK RESPONSE'), {
+        $metadata: { httpStatusCode: 503, privateField: 'PRIVATE METADATA' }
+    }), 'Read settings', {});
+    strict_1.default.match(sdk.body, /503/);
+    strict_1.default.doesNotMatch(sdk.body, /PRIVATE SDK RESPONSE|PRIVATE METADATA/);
+});
+(0, node_test_1.test)('outbox failure does not block direct GitHub delivery and retries retain the report marker', async () => {
+    const remote = [];
+    let available = false;
+    let posts = 0;
+    const outbox = {
+        async save() { throw new Error('YDB unavailable'); },
+        async pending() { throw new Error('YDB unavailable'); },
+        async remove() { throw new Error('YDB unavailable'); }
+    };
+    const reporter = new index_js_1.GitHubExceptionReporter({ token: 'token', repository: 'owner/repo', outbox,
+        fetch: (async (_url, init) => {
+            if (!available)
+                return new Response('{}', { status: 503 });
+            if (init?.method === 'POST') {
+                posts++;
+                remote.push(JSON.parse(String(init.body)));
+                return new Response('{}', { status: 201 });
+            }
+            return new Response(JSON.stringify(remote));
+        }) });
+    reporter.capture(new Error('boom'), 'Handle event', {});
+    await reporter.flush();
+    available = true;
+    await reporter.flush();
+    strict_1.default.equal(posts, 1);
+    await reporter.flush();
+    strict_1.default.equal(posts, 1);
 });
 //# sourceMappingURL=exception-reporting.test.js.map

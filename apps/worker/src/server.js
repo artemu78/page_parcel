@@ -39,12 +39,14 @@ const observability_1 = require("@readable-web/observability");
 class WorkerServer {
     server;
     port;
+    processAiRequest;
     processor;
     logger;
     triggerSecret;
     constructor(options) {
         this.port = options.port ?? (Number.parseInt(process.env.PORT || process.env.WORKER_PORT || '8080', 10));
         this.processor = options.processor;
+        this.processAiRequest = options.processAiRequest;
         this.logger = (options.logger ?? observability_1.defaultLogger).child({ component: 'WorkerServer' });
         this.triggerSecret = options.triggerSecret;
         this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -117,19 +119,33 @@ class WorkerServer {
                         res.end('Bad Request');
                         return;
                     }
-                    this.logger.info(`Received trigger payload: ${bodyStr.slice(0, 500)}`);
+                    this.logger.info('Received queue trigger');
                     let jobIds = [];
+                    const aiRequests = [];
+                    const acceptAi = (value) => {
+                        if (value?.kind !== 'ai')
+                            return false;
+                        if (!Number.isSafeInteger(value.ownerId) || value.ownerId <= 0 || typeof value.eventId !== 'string' || !/^[a-f0-9]{64}$/.test(value.eventId)) {
+                            throw new Error('Invalid AI queue reference');
+                        }
+                        aiRequests.push({ kind: 'ai', ownerId: value.ownerId, eventId: value.eventId });
+                        return true;
+                    };
                     // 1. Check messages array (standard YMQ trigger)
                     if (Array.isArray(bodyJson?.messages) && bodyJson.messages.length > 0) {
                         for (const msg of bodyJson.messages) {
                             const rawBody = msg?.details?.body ?? msg?.details?.message?.body ?? msg?.body ?? msg?.details?.message;
                             if (rawBody) {
+                                if (typeof rawBody === 'object' && acceptAi(rawBody))
+                                    continue;
                                 if (typeof rawBody === 'object' && rawBody.jobId) {
                                     jobIds.push(rawBody.jobId);
                                 }
                                 else if (typeof rawBody === 'string') {
                                     try {
                                         const parsedMsg = JSON.parse(rawBody);
+                                        if (acceptAi(parsedMsg))
+                                            continue;
                                         if (parsedMsg.jobId)
                                             jobIds.push(parsedMsg.jobId);
                                     }
@@ -138,6 +154,8 @@ class WorkerServer {
                                         try {
                                             const decoded = Buffer.from(rawBody, 'base64').toString('utf-8');
                                             const parsed = JSON.parse(decoded);
+                                            if (acceptAi(parsed))
+                                                continue;
                                             if (parsed.jobId)
                                                 jobIds.push(parsed.jobId);
                                         }
@@ -150,25 +168,34 @@ class WorkerServer {
                             }
                         }
                     }
+                    else if (acceptAi(bodyJson)) {
+                        // Direct internal trigger form.
+                    }
                     else if (bodyJson?.jobId) {
                         jobIds.push(bodyJson.jobId);
                     }
                     // 2. Fallback: extract any job ID matching pattern job_<timestamp>_<hash>
-                    if (jobIds.length === 0) {
+                    if (jobIds.length === 0 && aiRequests.length === 0) {
                         const matches = bodyStr.match(/job_\d+_[a-z0-9]+/g);
                         if (matches && matches.length > 0) {
                             jobIds = Array.from(new Set(matches));
                             this.logger.info(`Extracted job IDs via pattern match: ${jobIds.join(', ')}`);
                         }
                     }
-                    if (jobIds.length === 0) {
-                        this.logger.warn(`Trigger payload contained no recognized job IDs: ${bodyStr}`);
+                    if (jobIds.length === 0 && aiRequests.length === 0) {
+                        this.logger.warn('Trigger payload contained no recognized jobs');
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ status: 'ignored', reason: 'no_jobs' }));
                         return;
                     }
                     // Process jobs sequentially (trigger configured with batch size 1)
                     let hasRetryableFailure = false;
+                    for (const message of aiRequests) {
+                        if (!this.processAiRequest)
+                            throw new Error('AI queue processor is not configured');
+                        if ((await this.processAiRequest(message)).retryable)
+                            hasRetryableFailure = true;
+                    }
                     for (const jobId of jobIds) {
                         const outcome = await this.processor.processJob(jobId);
                         if (outcome.retryable) {
@@ -184,7 +211,7 @@ class WorkerServer {
                     else {
                         // Return 200 OK so YMQ trigger deletes message
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ status: 'ok', processed: jobIds.length }));
+                        res.end(JSON.stringify({ status: 'ok', processed: jobIds.length + aiRequests.length }));
                     }
                 }
                 catch (err) {

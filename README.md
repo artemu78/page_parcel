@@ -13,6 +13,7 @@ Production-minded MVP of a VK community bot that converts public web articles an
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
   * User `10487183` can choose GPT Sol 6.1 (low), GPT-6 Astra, or the default via «Модель ИИ» / `/model`. See [model selection](docs/operations.md#per-user-model-selection).
+  * `/ai-status`: Shows your current mode, latest AI request stage, failure category/HTTP status when available, and correlation ID. AI requests show VK’s native typing indicator while the answer is being prepared.
   * `/version`: Reports the running service version, git commit, build timestamp, and runtime environment.
   * `/help`: Displays service usage, capabilities, and limitations.
 * **Scope Boundaries:**
@@ -29,7 +30,9 @@ Production-minded MVP of a VK community bot that converts public web articles an
 - [Threat model](docs/threat-model.md): trust boundaries, threats, and intended safeguards.
 - [Operations](docs/operations.md): configuration and operational procedures.
 
-The application flow is VK callback → webhook → job store/outbox → queue → worker → article extraction → PDF generation → VK upload and delivery.
+AI requests use the same queue-triggered worker; deploy **both services** when changing AI processing (`npm run deploy`). The worker needs the existing Lockbox `openrouter_api_key` entry.
+
+The PDF application flow is VK callback → webhook → job store/outbox → queue → worker → article extraction → PDF generation → VK upload and delivery.
 
 ### Current implementation and design gaps
 
@@ -120,8 +123,8 @@ PORT=8081 node apps/worker/dist/index.js
 
 Without YDB configuration, each service creates its own in-memory job store. Without a queue URL, the webhook uses an in-memory queue. These separate processes do **not** form a connected local mock pipeline. Without a VK token, no real VK client is created. Use the test harnesses for mocked lifecycle checks; a connected deployment requires shared persistence and queue delivery to the worker.
 
-Code exceptions are reported as GitHub issues labelled `bug`; third-party HTTP
-responses are logged at Info. Configure `GITHUB_REPOSITORY` and the Lockbox
+Code exceptions and third-party failures are reported as GitHub issues labelled
+`bug`; third-party failures also remain Info-level log events. Configure `GITHUB_REPOSITORY` and the Lockbox
 `github_token` entry before production deployment. See the
 [reporting runbook](docs/operations.md#6-github-runtime-bug-reporting) for retries,
 privacy, and delivery limits.

@@ -267,6 +267,13 @@ resource "yandex_serverless_container" "worker" {
   secrets {
     id                   = yandex_lockbox_secret.vk_secrets.id
     version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
+    key                  = "openrouter_api_key"
+    environment_variable = "OPENROUTER_API_KEY"
+  }
+
+  secrets {
+    id                   = yandex_lockbox_secret.vk_secrets.id
+    version_id           = data.yandex_lockbox_secret.vk_secrets.current_version[0].id
     key                  = "github_token"
     environment_variable = "GITHUB_TOKEN"
   }

@@ -116,6 +116,7 @@ export class OpenRouterClient {
           method: 'POST',
           headers,
           agent,
+          signal: AbortSignal.timeout(this.timeoutMs),
           timeout: this.timeoutMs
         },
         (res) => {

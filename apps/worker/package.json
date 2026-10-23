@@ -13,6 +13,7 @@
     "@readable-web/pdf": "*",
     "@readable-web/rendering": "*",
     "@readable-web/safe-network": "*",
-    "@readable-web/vk": "*"
+    "@readable-web/vk": "*",
+    "@readable-web/webhook": "*"
   }
 }

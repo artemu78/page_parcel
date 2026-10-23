@@ -37,6 +37,7 @@ class VkApiClient {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 },
+                signal: AbortSignal.timeout(5000),
                 body: bodyParams.toString()
             });
         }
@@ -110,6 +111,9 @@ class VkApiClient {
             file,
             title
         });
+    }
+    async setTyping(peerId) {
+        await this.callMethod('messages.setActivity', { peer_id: peerId, type: 'typing' });
     }
     async sendMessage(params) {
         const callParams = {

@@ -9,6 +9,7 @@ export type ParsedCommand =
   | { type: 'more'; searchId: string; offset: number }
   | { type: 'status'; jobId: string }
   | { type: 'version' }
+  | { type: 'ai-status' }
   | { type: 'help' }
   | { type: 'unrecognized'; rawText: string };
 
@@ -41,6 +42,7 @@ export function parseCommand(text: string, payload?: string): ParsedCommand {
   }
 
   const trimmed = text.trim();
+  if (/^\/ai-status$/i.test(trimmed)) return { type: 'ai-status' };
   const modelMatch = trimmed.match(/^\/model(?:\s+(\S+))?$/i);
   if (modelMatch || trimmed === 'Модель ИИ') return { type: 'model', model: modelMatch?.[1] };
   if (/^(?:✅\s*)?🔎\s*Поиск$/u.test(trimmed)) return { type: 'mode', mode: 'search' };
@@ -97,7 +99,7 @@ export const HELP_MESSAGE = `🤖 Бот «Readable Web» (Удобное чте
 • /read <URL> — создать PDF-версию статьи
   Пример: /read https://example.org/article
 
-• /status <job-id> — узнать статус обработки вашего задания
+• /ai-status — состояние последнего запроса ИИ и код диагностики\n\n• /status <job-id> — узнать статус обработки вашего задания
 
 • /version — версия сервиса
 

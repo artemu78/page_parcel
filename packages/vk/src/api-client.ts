@@ -47,6 +47,7 @@ export class VkApiClient {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
+        signal: AbortSignal.timeout(5000),
         body: bodyParams.toString()
       });
     } catch (err) {
@@ -125,6 +126,10 @@ export class VkApiClient {
       file,
       title
     });
+  }
+
+  public async setTyping(peerId: number): Promise<void> {
+    await this.callMethod<number>('messages.setActivity', { peer_id: peerId, type: 'typing' });
   }
 
   public async sendMessage(params: {

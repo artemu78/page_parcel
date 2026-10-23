@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redactSensitiveData } from './redaction.js';
 
-/** A received upstream response is operational information, not a code exception. */
+/** A received upstream response stays operational in logs and is also reported to GitHub. */
 export class UpstreamResponseError extends Error {
   constructor(message: string, public readonly service: string, public readonly statusCode: number) {
     super(message);
@@ -53,14 +53,25 @@ export function buildExceptionReport(error: unknown, operation: string, context:
   }
   const appVersion = redactSensitiveData(process.env.APP_VERSION || 'unknown (APP_VERSION not set)')
     .replace(/[\r\n`]/g, ' ').slice(0, 256);
-  const message = redactSensitiveData(error instanceof Error ? error.message : String(error))
+  const sdkStatus = error !== null && typeof error === 'object'
+    ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode : undefined;
+  const upstreamStatus = error instanceof UpstreamResponseError ? error.statusCode : sdkStatus;
+  const upstream = typeof upstreamStatus === 'number';
+  if (upstream && Number.isInteger(upstreamStatus) && upstreamStatus >= 100 && upstreamStatus <= 599) {
+    safeContext.httpStatus = upstreamStatus;
+  }
+  if (error instanceof UpstreamResponseError && /^[a-zA-Z0-9_.:-]{1,80}$/.test(error.service)) {
+    safeContext.upstreamService = error.service;
+  }
+  // Provider/SDK messages may embed prompts or raw bodies; only export status and fixed text.
+  const message = redactSensitiveData(upstream ? 'Received upstream failure; response text omitted.' : error instanceof Error ? error.message : String(error))
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL REDACTED]');
   const errorText = message.length > 12000 ? message.slice(0, 12000) + '\n[truncated]' : message;
   // An exception may contain Markdown fences; keep its text inside a single code block.
   const fenceLength = Math.max(3, ...Array.from(errorText.matchAll(/`+/g), match => match[0].length + 1));
   const errorBlock = `${'`'.repeat(fenceLength)}text\n${errorText}\n${'`'.repeat(fenceLength)}`;
   const id = randomUUID();
-  const kind = error instanceof TypeError ? 'TypeError' : error instanceof SyntaxError ? 'SyntaxError' : 'Exception';
+  const kind = upstream ? 'UpstreamResponse' : error instanceof TypeError ? 'TypeError' : error instanceof SyntaxError ? 'SyntaxError' : 'Exception';
   // operation is a developer-defined label, never interpolate request data into it.
   const safeOperation = operation.replace(/[^a-zA-Z0-9 _.:-]/g, '').slice(0, 120);
   return {
@@ -87,7 +98,6 @@ export class GitHubExceptionReporter implements ExceptionReporter {
   }
 
   capture(error: unknown, operation: string, context: Record<string, unknown>): void {
-    if (error instanceof UpstreamResponseError) return;
     if (error !== null && typeof error === 'object') {
       if (this.seen.has(error)) return;
       this.seen.add(error);
@@ -115,10 +125,21 @@ export class GitHubExceptionReporter implements ExceptionReporter {
     if (this.options.outbox) {
       for (const report of pending) {
         if (Date.now() >= deadline) break;
-        await this.options.outbox.save(report);
-        this.reports.delete(report.id);
+        try {
+          await this.options.outbox.save(report);
+          this.reports.delete(report.id);
+        } catch {
+          // Keep the same report in memory and attempt GitHub even while YDB is unavailable.
+          this.options.onFailure?.(report.id);
+        }
       }
-      pending = await this.options.outbox.pending();
+      try {
+        const stored = await this.options.outbox.pending();
+        pending = [...new Map([...this.reports.values(), ...stored].map(report => [report.id, report])).values()];
+      } catch {
+        this.options.onFailure?.('outbox');
+        pending = [...this.reports.values()];
+      }
     }
     for (const report of pending) {
       if (Date.now() >= deadline) break;

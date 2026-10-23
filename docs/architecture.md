@@ -153,7 +153,9 @@
 ## Runtime exception reporting
 
 The observability package classifies code exceptions separately from received
-upstream responses. A GitHub reporter creates `bug` issues; a dedicated YDB
+upstream responses in logs. Both categories create GitHub `bug` issues; upstream
+reports omit provider/SDK exception text. A GitHub reporter uses direct delivery
+for in-memory reports if the YDB outbox fails; a dedicated YDB
 `exception_reports` outbox retains pending sanitized reports with delivery leases.
 This outbox does not change job processing attempts, queue acknowledgments, or VK
 attachment checkpoints. See the [operations runbook](operations.md#6-github-runtime-bug-reporting)
@@ -176,7 +178,19 @@ The webhook routes ordinary private messages using a per-user `ConversationStore
 Persistent controls select search or AI; inline result actions still enter the
 existing PDF/search pipeline. Production stores mode and bounded context in YDB
 `conversations`; local mode uses memory. Version checks serialize reservations,
-mode changes and context resets. The existing OpenRouter client accepts recent
-user/assistant history and the configured model. AI chat does not invoke fetching,
+mode changes and context resets. The webhook persists the pending prompt in `conversations`, signals native VK typing,
+and publishes an AI reference (owner ID and event hash only) to the existing YMQ
+queue before acknowledging VK. The worker claims queued requests with a conversation version
+check and runs generation while its trigger invocation remains active. The existing
+OpenRouter client accepts recent user/assistant history and the configured model. AI chat does not invoke fetching,
 PDF generation or web search. See [operations](operations.md#8-chat-modes) for
 retention and best-effort delivery limits.
+
+
+AI lifecycle diagnostics are stored as `lastAiRequest` in the conversation row:
+queued, processing, delivering, completed, failed or interrupted, with timestamps,
+fixed failure categories and optional HTTP status. `/ai-status` is owner-only and
+contains no prompt or reply text. Queue redelivery does not regenerate an already
+claimed prompt; an expired attempt produces an interruption report and chat notice.
+A reset or model change fences queued and running requests. Callback handling and
+report flushing are awaited; they are no longer detached after returning `ok`.

@@ -125,13 +125,16 @@ ordinary operational events rather than code bugs.
 `UpstreamResponseError` represents a received third-party failure response. VK
 HTTP/API errors, OpenRouter non-2xx responses, article HTTP failures, and SDK errors
 carrying `$metadata.httpStatusCode` are logged at **Info**, including at enclosing
-catch boundaries, and do not create bug issues. HTTP statuses are logged without
-response bodies, prompts, authorization headers, or signed upload URLs. Existing
+catch boundaries, and also create GitHub issues labelled `bug`. These reports use
+`UpstreamResponse` as their kind and include HTTP status and, for
+`UpstreamResponseError`, the service. Provider/SDK exception messages and arbitrary
+metadata are omitted, because they can contain private request or response data.
+HTTP statuses are logged without response bodies, prompts, authorization headers, or signed upload URLs. Existing
 job retry/failure decisions and VK ErrorListener delivery remain in place.
 
 With YDB configured, startup creates `exception_reports`, independently of the job
-state machine. Reports are persisted before delivery, claimed in batches of 10
-under a five-minute lease using a serializable transaction, and removed after
+state machine. Reports are normally persisted before delivery, claimed in batches
+of 10 under a five-minute lease using a serializable transaction, and removed after
 GitHub confirms creation (or an existing issue with the report marker is found).
 Both services retry pending reports every 30 seconds and flush at processing and
 shutdown boundaries. HTTP calls have five-second timeouts; a drain stops starting
@@ -153,9 +156,14 @@ reports preserve the version and text from capture time. Existing issues and
 previously stored report bodies are not retroactively changed. GitHub issues have
 the repository's visibility and retention; remove them there when required.
 
+If saving or reading the YDB outbox fails, reports still held in memory are sent
+directly to GitHub and retained for retry on failure. The stable report marker
+also prevents another POST if outbox cleanup fails after creation. Reports already
+persisted in YDB cannot be read or drained during a YDB outage.
+
 Delivery is best effort before the outbox is initialized, without YDB (local mode),
-or while YDB is unavailable. A hard kill/OOM before persistence cannot be reported
-by process hooks. GitHub does not offer an idempotency key for issue creation:
+or while YDB is unavailable. In-memory fallback reports cannot survive a hard kill.
+A hard kill/OOM before persistence cannot be reported by process hooks. GitHub does not offer an idempotency key for issue creation:
 a stable report marker and paginated issue lookup reduce duplicates after an
 ambiguous POST, but do not give an exactly-once guarantee. Lookup stops after ten
 pages of issues updated since the capture time (with a one-minute clock margin),
@@ -233,7 +241,8 @@ the community setting is fixed.
 
 Webhook startup initializes `conversations` (`owner_id Int64` primary key,
 `version Int64`, `data Utf8`). JSON contains mode, bounded context, up to 100 recent
-mode/free-text event hashes, and a pending AI reservation. Serializable version-checked
+mode/free-text event hashes, a pending AI reservation (including the queued prompt),
+and `lastAiRequest` stage/timestamp/failure metadata. Serializable version-checked
 writes avoid lost updates across instances. Mode survives restart in YDB; local
 memory mode resets on restart. This table has no native TTL: context older than
 24 hours is excluded from prompts and cleared on the next successful mutation,
@@ -251,16 +260,39 @@ Input is limited to 4000 characters; context to 12 recent user/assistant pairs a
 24000 characters. Generation requests use `max_tokens: 2000`, and replies are
 split into chunks below 4000 characters, each marked «💬 Ответ ИИ». AI requests
 share the existing per-user minute quota with PDF requests; search keeps its own
-30-second cooldown. One AI request per user can be pending for 90 seconds.
+30-second cooldown. One AI request per user can be queued for up to five minutes; the worker claims
+it for 90 seconds. OpenRouter has a 60-second wall-clock and socket deadline.
+VK API method calls have a five-second deadline.
 Duplicate accepted AI events within the last 100 mode/free-text events do not call the
 provider again. Reset clears pending state, fencing late replies; changing mode
 preserves context and does not let a pending reply overwrite the selected mode.
 
-Replies remain best-effort: a process interruption after reservation can lose a
-reply, and duplicate callbacks are not a durable delivery retry mechanism. After
-90 seconds a fresh prompt can acquire a new reservation. Old event hashes beyond
-the bounded deduplication window may be accepted again. Live VK, OpenRouter and
-YDB behavior must be verified separately from the mocked tests.
+Production AI generation runs in the existing YMQ-triggered **worker**, not as
+background work after the webhook responds. The webhook saves the prompt in YDB, signals native VK typing, publishes only
+`{kind: "ai", ownerId, eventId}` to YMQ, then acknowledges VK. Both services must be deployed (`npm run deploy`); deploying only
+the webhook is insufficient. Terraform now also injects `openrouter_api_key` into
+the worker. Worker queue payload logs contain no raw bodies.
+
+`/ai-status` reports only the requesting user's mode, stage, fixed failure category,
+HTTP status when available, and full event hash for correlation with GitHub issues.
+An expired reservation is reported as interrupted when inspected, replaced by a
+new request, or redelivered by YMQ. The status command clears expired pending text.
+No diagnostic requires Yandex Logging. Successful processing leaves `completed`;
+provider/delivery failures send a chat notice, record `failed`, and use GitHub
+reporting. Keyboard-state lookup failures do not suppress the message itself.
+
+Duplicate callbacks can republish a queued reference, recovering an interruption
+between saving and publishing. Concurrent worker claims are version checked;
+active claims return a retryable trigger response and completed/stale references
+are acknowledged without generating again. Reset/model change fences old references.
+A worker killed after claiming a request is not automatically allowed to generate
+it a second time: redelivery after its deadline reports interruption and notifies
+the user. A failed delivery is reported; delivery is not guaranteed while VK is
+unavailable. Pending prompt text has no native TTL and can remain until processing,
+reset or subsequent access clears it; restrict database access. A crash between
+saving and publishing without a VK retry still needs `/ai-status` or a fresh
+request for detection. Old event hashes beyond the bounded deduplication window may
+be accepted again. Live VK, OpenRouter, YMQ and YDB behavior require separate checks.
 
 ### Per-user model selection
 
@@ -314,7 +346,7 @@ content policy or model availability; unrecognized/HTML errors remain
 `upstream_rejection`. A 403 alone does not establish a geography restriction.
 Malformed completions and oversized bodies have their own fixed categories.
 Responses are capped at one MiB; upstream rejections remain Info-level
-`UpstreamResponseError` events and intentionally do not create GitHub issues.
+`UpstreamResponseError` events and also create sanitized GitHub issues.
 Actual code exceptions still use `Logger.exception` and the existing reporter.
 
 Do not log raw provider error messages or metadata: responses can echo prompts or
@@ -355,3 +387,15 @@ Chromium channel requires revisiting that installation.
 ### Article images in PDFs
 
 The worker embeds up to 12 extracted article images as raster data URLs before offline PDF printing. Supported formats are PNG, JPEG, GIF and WebP; SVG, CSS backgrounds and images outside extracted content are excluded. Image fetches use the job browser context and validating egress proxy, including redirect validation and shared proxy byte/request limits. Each embedded image is limited to 2 MiB, with an 8 MiB total embedding budget and 15-second navigation budget (up to 3 seconds per navigation). Unavailable or rejected images are omitted without failing the article. The existing 10 MiB final PDF limit still applies. Deploy the worker image to enable this behavior.
+
+
+### AI typing indicator
+
+AI acceptance uses [`messages.setActivity`](https://github.com/VKCOM/vk-api-schema/blob/master/messages/methods.json)
+with `peer_id` and `type=typing`, authenticated by the community token. The worker
+renews the indicator every seven seconds while awaiting generation and stops
+renewal before answer/error delivery and on cleanup. Renewal checks the pending
+request so a reset or newer request fences it. No timer runs after the trigger
+response. Typing failures use the exception reporter but do not abort generation.
+`/ai-status` and explicit error notices remain available; typing is transient and
+is not a durable receipt or a guarantee of processing.

@@ -20,6 +20,7 @@ export declare class VkApiClient {
     getMessagesUploadServer(peerId: number): Promise<VkUploadServerResponse>;
     uploadPdfDocument(uploadUrl: string, pdfBuffer: Buffer, filename: string): Promise<string>;
     saveDocument(file: string, title: string): Promise<VkSaveDocResponse>;
+    setTyping(peerId: number): Promise<void>;
     sendMessage(params: {
         peerId: number;
         message: string;

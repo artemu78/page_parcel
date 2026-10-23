@@ -9,7 +9,8 @@ export interface Conversation {
   history: ChatMessage[];
   historyUpdatedAt: number;
   recentEvents: string[];
-  pending?: { eventId: string; expiresAt: number };
+  pending?: { eventId: string; expiresAt: number; prompt?: string; stage?: 'queued' | 'processing' };
+  lastAiRequest?: { eventId: string; stage: 'queued' | 'processing' | 'delivering' | 'completed' | 'failed' | 'interrupted'; updatedAt: number; failureCategory?: 'provider_failure' | 'delivery_failure' | 'queue_failure' | 'internal_error'; httpStatus?: number };
 }
 export const HISTORY_TTL_MS = 86400000;
 export function emptyConversation(): Conversation {

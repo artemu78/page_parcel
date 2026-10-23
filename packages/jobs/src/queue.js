@@ -16,6 +16,14 @@ class SqsQueueClient {
             credentials: options.credentials
         });
     }
+    async publishAiRequest(message) {
+        await this.client.send(new client_sqs_1.SendMessageCommand({
+            QueueUrl: this.queueUrl, MessageBody: JSON.stringify(message),
+            ...(this.queueUrl.endsWith('.fifo') ? {
+                MessageDeduplicationId: message.eventId, MessageGroupId: `user_${message.ownerId}`
+            } : {})
+        }));
+    }
     async publishJob(job) {
         const payload = {
             jobId: job.id,
@@ -47,6 +55,8 @@ class SqsQueueClient {
 exports.SqsQueueClient = SqsQueueClient;
 class MemoryQueueClient {
     messages = [];
+    aiMessages = [];
+    async publishAiRequest(message) { this.aiMessages.push(structuredClone(message)); }
     async publishJob(job) {
         this.messages.push({
             jobId: job.id,

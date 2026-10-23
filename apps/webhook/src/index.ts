@@ -85,6 +85,7 @@ async function bootstrap() {
     outboxService,
     searchStore,
     conversationStore,
+    publishAiRequest: queueClient.publishAiRequest!.bind(queueClient),
     vkClient,
     openRouterClient,
     validationOptions: {

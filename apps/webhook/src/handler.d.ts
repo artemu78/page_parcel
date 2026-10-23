@@ -1,10 +1,11 @@
 import { ConversationStore, SearchStore } from '@readable-web/jobs';
 import { SearchClient } from './search.js';
 import { CallbackValidationOptions, VkApiClient } from '@readable-web/vk';
-import { JobStore, OutboxService } from '@readable-web/jobs';
+import { JobStore, OutboxService, AiQueueMessage } from '@readable-web/jobs';
 import { Logger } from '@readable-web/observability';
 import { OpenRouterClient } from './openrouter.js';
 export interface WebhookHandlerOptions {
+    publishAiRequest?: (message: AiQueueMessage) => Promise<void>;
     conversationStore?: ConversationStore;
     searchStore?: SearchStore;
     searchClient?: SearchClient;
@@ -17,6 +18,7 @@ export interface WebhookHandlerOptions {
     maxUserRequestsPerMinute?: number;
 }
 export declare class WebhookHandler {
+    private publishAiRequest?;
     private conversationStore;
     private openRouterClient?;
     private searchStore;
@@ -36,6 +38,14 @@ export declare class WebhookHandler {
     /** Serializable CAS retries keep mode changes independent of pending AI replies. */
     private changeConversation;
     private handleAiChat;
+    /** Called only by the authenticated queue-triggered worker; queue contains no conversation text. */
+    processQueuedAiRequest(message: AiQueueMessage): Promise<{
+        retryable: boolean;
+    }>;
+    private processAiQueueReference;
+    private runAiChat;
+    private sendTyping;
+    private refreshAiTyping;
     private greetAllowedUser;
     private handleSearch;
     private handleReadCommand;

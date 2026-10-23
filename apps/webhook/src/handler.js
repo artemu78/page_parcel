@@ -12,6 +12,7 @@ const observability_2 = require("@readable-web/observability");
 const commands_js_1 = require("./commands.js");
 const openrouter_js_1 = require("./openrouter.js");
 class WebhookHandler {
+    publishAiRequest;
     conversationStore;
     openRouterClient;
     searchStore;
@@ -23,6 +24,7 @@ class WebhookHandler {
     logger;
     maxRequestsPerMinute;
     constructor(options) {
+        this.publishAiRequest = options.publishAiRequest;
         this.conversationStore = options.conversationStore ?? new jobs_1.MemoryConversationStore();
         this.openRouterClient = options.openRouterClient;
         this.searchStore = options.searchStore ?? new jobs_1.MemorySearchStore();
@@ -45,18 +47,26 @@ class WebhookHandler {
             return { statusCode: 200, body: validation.response };
         }
         const event = validation.event;
-        if (event.type === 'message_allow') {
-            const userId = event.object?.user_id;
-            if (Number.isSafeInteger(userId) && userId > 0) {
-                this.greetAllowedUser(userId, event.event_id).catch(err => this.logger.exception(err, 'Send welcome message'));
+        try {
+            if (event.type === 'message_allow') {
+                const userId = event.object?.user_id;
+                if (Number.isSafeInteger(userId) && userId > 0)
+                    await this.greetAllowedUser(userId, event.event_id);
+            }
+            if ((0, vk_1.isMessageNewEvent)(event))
+                await this.processMessageEvent(event);
+        }
+        catch (err) {
+            this.logger.exception(err, 'Error processing message event');
+            if ((0, vk_1.isMessageNewEvent)(event)) {
+                const msg = event.object.message;
+                if (msg.from_id > 0 && msg.peer_id === msg.from_id) {
+                    await this.sendReply(msg.peer_id, '⚠️ Не удалось обработать сообщение. Ошибка передана в диагностику. Повторите запрос или отправьте /ai-status.', `event_failed_${msg.peer_id}_${msg.id}`, (0, vk_1.createModeKeyboard)('ai', msg.from_id === models_js_1.MODEL_OWNER_ID));
+                }
             }
         }
-        if ((0, vk_1.isMessageNewEvent)(event)) {
-            const msg = event.object.message;
-            // Process event asynchronously or safely within callback deadline
-            this.processMessageEvent(event).catch((err) => {
-                this.logger.exception(err, 'Error processing message event');
-            }).finally(() => (0, observability_1.flushExceptionReports)());
+        finally {
+            await (0, observability_1.flushExceptionReports)();
         }
         // Acknowledge accepted event immediately with plain-text 'ok'
         return { statusCode: 200, body: 'ok' };
@@ -106,6 +116,8 @@ class WebhookHandler {
                     state.modelKey = selected?.key;
                     state.mode = 'ai';
                     // Fence the old completion so its answer cannot arrive under a new model.
+                    if (state.pending)
+                        delete state.lastAiRequest;
                     delete state.pending;
                     return true;
                 });
@@ -126,6 +138,7 @@ class WebhookHandler {
                         state.history = [];
                         state.historyUpdatedAt = 0;
                         delete state.pending;
+                        delete state.lastAiRequest;
                     }
                     return true;
                 });
@@ -160,6 +173,30 @@ class WebhookHandler {
             }
             case 'help': {
                 await this.sendReply(peerId, commands_js_1.HELP_MESSAGE, `help_${msg.id}`);
+                break;
+            }
+            case 'ai-status': {
+                let state = await this.conversationStore.get(fromId);
+                if (state.pending && state.pending.expiresAt <= Date.now()) {
+                    const expiredId = state.pending.eventId;
+                    const cleared = await this.changeConversation(fromId, current => {
+                        if (current.pending?.eventId !== expiredId || current.pending.expiresAt > Date.now())
+                            return false;
+                        delete current.pending;
+                        current.lastAiRequest = { eventId: expiredId, stage: 'interrupted', updatedAt: Date.now() };
+                        return true;
+                    });
+                    if (cleared) {
+                        this.logger.exception(new Error('AI request interrupted before completion'), 'AI request interrupted', { requestId: expiredId });
+                        state = cleared;
+                    }
+                }
+                const trace = state.lastAiRequest;
+                const stage = state.pending && state.pending.expiresAt <= Date.now() ? 'interrupted' : trace?.stage;
+                const labels = { queued: 'в очереди', processing: 'ожидание ответа ИИ', delivering: 'отправка ответа в VK',
+                    completed: 'ответ отправлен', failed: 'ошибка обработки или доставки', interrupted: 'обработка прервана или истекло время ожидания' };
+                const id = state.pending?.eventId ?? trace?.eventId;
+                await this.sendReply(peerId, `💬 Режим: ${state.mode === 'ai' ? 'ИИ' : 'поиск'}.\nСостояние: ${stage ? labels[stage] : 'запросов ещё нет'}.${trace?.failureCategory ? `\nПричина: ${trace.failureCategory}` : ''}${trace?.httpStatus ? `\nHTTP: ${trace.httpStatus}` : ''}${id ? `\nКод: ${id}` : ''}`, `ai_status_${msg.id}`, (0, vk_1.createModeKeyboard)(state.mode, fromId === models_js_1.MODEL_OWNER_ID));
                 break;
             }
             case 'version': {
@@ -219,11 +256,12 @@ class WebhookHandler {
             await this.sendReply(peerId, '💬 Сократите сообщение до 4000 символов.', `ai_long_${eventId}`);
             return;
         }
-        if (!this.openRouterClient) {
+        if (!this.openRouterClient && !this.publishAiRequest) {
             await this.sendReply(peerId, '💬 Чат с ИИ временно недоступен. Можно переключиться на поиск.', `ai_unavailable_${eventId}`);
             return;
         }
         let busy = false;
+        let interruptedId;
         const reserved = await this.changeConversation(ownerId, state => {
             busy = false;
             if (state.recentEvents.includes(eventId))
@@ -232,15 +270,113 @@ class WebhookHandler {
                 busy = true;
                 return false;
             }
+            interruptedId = state.pending?.eventId;
             state.recentEvents = [...state.recentEvents, eventId].slice(-100);
-            state.pending = { eventId, expiresAt: Date.now() + 90000 };
+            state.pending = { eventId, expiresAt: Date.now() + (this.publishAiRequest ? 300000 : 90000),
+                ...(this.publishAiRequest ? { prompt, stage: 'queued' } : {}) };
+            state.lastAiRequest = { eventId, stage: 'queued', updatedAt: Date.now() };
             return true;
         });
         if (!reserved) {
+            const current = await this.conversationStore.get(ownerId);
+            if (this.publishAiRequest && current.pending?.eventId === eventId && current.pending.stage === 'queued') {
+                // Recover a callback retry after persistence but before queue publication/acknowledgment.
+                await this.sendTyping(peerId, eventId);
+                await this.publishAiRequest({ kind: 'ai', ownerId, eventId });
+            }
             if (busy)
                 await this.sendReply(peerId, '💬 Дождитесь ответа ИИ, затем отправьте следующее сообщение.', `ai_busy_${eventId}`);
             return;
         }
+        if (interruptedId)
+            this.logger.exception(new Error('Previous AI request expired before completion'), 'AI request interrupted', { requestId: interruptedId });
+        if (this.publishAiRequest) {
+            try {
+                await this.sendTyping(peerId, eventId);
+                await this.publishAiRequest({ kind: 'ai', ownerId, eventId });
+            }
+            catch (error) {
+                this.logger.exception(error, 'Queue AI request', { requestId: eventId });
+                await this.sendReply(peerId, `💬 Не удалось поставить запрос ИИ в очередь. Повторите сообщение.\nКод: ${eventId}`, `ai_queue_failed_${eventId}`, (0, vk_1.createModeKeyboard)('ai', ownerId === models_js_1.MODEL_OWNER_ID));
+                await this.changeConversation(ownerId, state => {
+                    if (state.pending?.eventId !== eventId)
+                        return false;
+                    delete state.pending;
+                    state.recentEvents = state.recentEvents.filter(id => id !== eventId);
+                    state.lastAiRequest = { eventId, stage: 'failed', updatedAt: Date.now(), failureCategory: 'queue_failure' };
+                    return true;
+                });
+            }
+            return;
+        }
+        await this.runAiChat(peerId, ownerId, prompt, eventId, reserved);
+    }
+    /** Called only by the authenticated queue-triggered worker; queue contains no conversation text. */
+    async processQueuedAiRequest(message) {
+        try {
+            return await this.processAiQueueReference(message);
+        }
+        catch (error) {
+            this.logger.exception(error, 'Read or claim queued AI request', { requestId: message.eventId });
+            await this.sendReply(message.ownerId, `💬 Не удалось прочитать или обработать запрос ИИ. Повторите позже.\nКод: ${message.eventId}`, `ai_storage_failed_${message.eventId}`, (0, vk_1.createModeKeyboard)('ai', message.ownerId === models_js_1.MODEL_OWNER_ID));
+            return { retryable: true };
+        }
+    }
+    async processAiQueueReference(message) {
+        const { ownerId, eventId } = message;
+        const current = await this.conversationStore.get(ownerId);
+        if (current.pending?.eventId !== eventId)
+            return { retryable: false };
+        if (current.pending.expiresAt <= Date.now()) {
+            this.logger.exception(new Error('AI request interrupted before completion'), 'AI request interrupted', { requestId: eventId });
+            await this.sendReply(ownerId, `💬 Обработка запроса ИИ прервана или истекло время ожидания. Отправьте сообщение ещё раз.\nКод: ${eventId}`, `ai_interrupted_${eventId}`, (0, vk_1.createModeKeyboard)(current.mode, ownerId === models_js_1.MODEL_OWNER_ID));
+            await this.changeConversation(ownerId, state => {
+                if (state.pending?.eventId !== eventId)
+                    return false;
+                delete state.pending;
+                state.lastAiRequest = { eventId, stage: 'interrupted', updatedAt: Date.now() };
+                return true;
+            });
+            return { retryable: false };
+        }
+        if (current.pending.stage === 'processing')
+            return { retryable: true };
+        const user = await this.jobStore.getUser?.(ownerId);
+        if (user?.status === 1)
+            return { retryable: false };
+        const reserved = await this.changeConversation(ownerId, state => {
+            if (state.pending?.eventId !== eventId || state.pending.stage !== 'queued')
+                return false;
+            state.pending.stage = 'processing';
+            state.pending.expiresAt = Date.now() + 90000;
+            state.lastAiRequest = { eventId, stage: 'processing', updatedAt: Date.now() };
+            return true;
+        });
+        if (!reserved)
+            return { retryable: true };
+        try {
+            if (!this.openRouterClient)
+                throw new Error('AI worker provider is not configured');
+            if (!reserved.pending?.prompt)
+                throw new Error('AI queued request prompt is unavailable');
+            await this.runAiChat(ownerId, ownerId, reserved.pending.prompt, eventId, reserved);
+            return { retryable: false };
+        }
+        catch (error) {
+            this.logger.exception(error, 'Process queued AI request', { requestId: eventId });
+            await this.sendReply(ownerId, `💬 Не удалось обработать запрос ИИ. Повторите сообщение.\nКод: ${eventId}`, `ai_worker_failed_${eventId}`, (0, vk_1.createModeKeyboard)(current.mode, ownerId === models_js_1.MODEL_OWNER_ID));
+            return { retryable: true };
+        }
+    }
+    async runAiChat(peerId, ownerId, prompt, eventId, reserved) {
+        let phase = 'settings';
+        let typingTimer;
+        let typingRefresh;
+        const stopTyping = async () => {
+            clearInterval(typingTimer);
+            typingTimer = undefined;
+            await typingRefresh;
+        };
         try {
             const rate = await this.jobStore.checkAndConsumeRateLimit(ownerId, this.maxRequestsPerMinute, 60000);
             if (!rate.allowed) {
@@ -248,12 +384,24 @@ class WebhookHandler {
                 return;
             }
             const settings = await this.jobStore.getSettings();
+            if (!this.openRouterClient)
+                throw new Error('AI provider is not configured');
             const selection = (0, models_js_1.selectedModel)(ownerId, reserved.modelKey);
+            phase = 'provider';
+            await this.sendTyping(peerId, eventId);
+            // Only renew during the active worker invocation; never leave a post-response timer.
+            typingTimer = setInterval(() => {
+                if (typingRefresh)
+                    return;
+                typingRefresh = this.refreshAiTyping(peerId, ownerId, eventId).finally(() => { typingRefresh = undefined; });
+            }, 7000);
+            typingTimer.unref();
             const reply = await this.openRouterClient.complete({ prompt, history: reserved.history,
                 model: selection?.model ?? (0, models_js_1.defaultModelFor)(ownerId, settings.openRouterModel),
                 reasoningEffort: selection?.reasoningEffort, baseUrl: settings.openRouterBaseUrl,
                 proxyUrl: settings.openRouterProxy, maxTokens: 2000,
                 systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. В этом режиме у тебя нет доступа к веб-поиску; не утверждай, что проверил актуальные сведения в интернете.' });
+            await stopTyping();
             if (!reply.trim())
                 throw new observability_2.UpstreamResponseError('Empty AI completion', 'OpenRouter', 200);
             const finished = await this.changeConversation(ownerId, state => {
@@ -261,29 +409,78 @@ class WebhookHandler {
                     return false;
                 state.history = (0, jobs_1.trimHistory)([...reserved.history, { role: 'user', content: prompt }, { role: 'assistant', content: reply }]);
                 state.historyUpdatedAt = Date.now();
-                delete state.pending;
+                state.lastAiRequest = { eventId, stage: 'delivering', updatedAt: Date.now() };
                 return true;
             });
-            if (!finished)
+            if (!finished) {
+                const state = await this.conversationStore.get(ownerId);
+                if (state.pending?.eventId === eventId)
+                    throw new Error('AI request deadline expired');
                 return; // A reset or a newer reservation superseded this reply.
-            for (const [index, chunk] of (0, openrouter_js_1.splitMessage)(reply, 3900).entries()) {
-                await this.sendReply(peerId, `💬 Ответ ИИ\n\n${chunk}`, `ai_${eventId}_${index}`);
             }
+            phase = 'delivery';
+            for (const [index, chunk] of (0, openrouter_js_1.splitMessage)(reply, 3900).entries()) {
+                if (!await this.sendReply(peerId, `💬 Ответ ИИ\n\n${chunk}`, `ai_${eventId}_${index}`)) {
+                    throw new Error('AI response delivery failed');
+                }
+            }
+            await this.changeConversation(ownerId, state => {
+                if (state.lastAiRequest?.eventId !== eventId)
+                    return false;
+                if (state.pending?.eventId === eventId)
+                    delete state.pending;
+                state.lastAiRequest = { eventId, stage: 'completed', updatedAt: Date.now() };
+                return true;
+            });
         }
         catch (error) {
-            this.logger.exception(error, 'AI chat completion failed');
+            await stopTyping();
+            this.logger.exception(error, 'AI chat completion failed', { requestId: eventId });
             const current = await this.conversationStore.get(ownerId);
-            if (current.pending?.eventId === eventId) {
-                await this.sendReply(peerId, '💬 Не удалось получить ответ ИИ. Попробуйте позже.', `ai_failed_${eventId}`);
+            if (current.pending?.eventId === eventId || current.lastAiRequest?.eventId === eventId && current.lastAiRequest.stage === 'delivering') {
+                await this.sendReply(peerId, `💬 Не удалось получить или отправить ответ ИИ. Попробуйте позже.\nКод: ${eventId}`, `ai_failed_${eventId}`);
             }
+            await this.changeConversation(ownerId, state => {
+                if (state.lastAiRequest?.eventId !== eventId)
+                    return false;
+                state.lastAiRequest = { eventId, stage: 'failed', updatedAt: Date.now(),
+                    failureCategory: phase === 'provider' ? 'provider_failure' : phase === 'delivery' ? 'delivery_failure' : 'internal_error',
+                    ...(error instanceof observability_2.UpstreamResponseError ? { httpStatus: error.statusCode } : {}) };
+                return true;
+            });
         }
         finally {
+            await stopTyping();
             await this.changeConversation(ownerId, state => {
                 if (state.pending?.eventId !== eventId)
                     return false;
                 delete state.pending;
+                if (state.lastAiRequest?.eventId !== eventId || state.lastAiRequest.stage !== 'failed') {
+                    state.lastAiRequest = { eventId, stage: 'failed', updatedAt: Date.now() };
+                }
                 return true;
             });
+        }
+    }
+    async sendTyping(peerId, eventId) {
+        if (!this.vkClient?.setTyping)
+            return;
+        try {
+            await this.vkClient.setTyping(peerId);
+        }
+        catch (error) {
+            this.logger.exception(error, 'Set VK typing activity', { requestId: eventId });
+        }
+    }
+    async refreshAiTyping(peerId, ownerId, eventId) {
+        try {
+            const state = await this.conversationStore.get(ownerId);
+            if (state.pending?.eventId === eventId && state.pending.expiresAt > Date.now()) {
+                await this.sendTyping(peerId, eventId);
+            }
+        }
+        catch (error) {
+            this.logger.exception(error, 'Read AI typing reservation', { requestId: eventId });
         }
     }
     async greetAllowedUser(userId, eventId) {
@@ -419,9 +616,16 @@ class WebhookHandler {
     }
     async sendReply(peerId, message, seed, keyboard) {
         if (!this.vkClient)
-            return;
+            return false;
         try {
-            keyboard ??= (0, vk_1.createModeKeyboard)((await this.conversationStore.get(peerId)).mode, peerId === models_js_1.MODEL_OWNER_ID);
+            if (!keyboard) {
+                try {
+                    keyboard = (0, vk_1.createModeKeyboard)((await this.conversationStore.get(peerId)).mode, peerId === models_js_1.MODEL_OWNER_ID);
+                }
+                catch (error) {
+                    this.logger.exception(error, 'Read reply keyboard settings');
+                }
+            }
             const randomId = (0, vk_1.generateStableRandomId)(seed);
             await this.vkClient.sendMessage({
                 peerId,
@@ -429,6 +633,7 @@ class WebhookHandler {
                 randomId,
                 keyboard
             });
+            return true;
         }
         catch (err) {
             if (keyboard) {
@@ -443,15 +648,16 @@ class WebhookHandler {
                             message,
                             randomId
                         });
-                        return;
+                        return true;
                     }
                     catch (retryErr) {
                         this.logger.exception(retryErr, 'Failed to send fallback VK message');
-                        return;
+                        return false;
                     }
                 }
             }
             this.logger.exception(err, 'Failed to send VK message');
+            return false;
         }
     }
 }

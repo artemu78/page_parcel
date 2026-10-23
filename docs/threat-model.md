@@ -169,5 +169,15 @@ proxy settings. Diagnostics emit only hostnames, model, routing flags, bounded
 provider correlation IDs, numeric error codes and fixed failure categories. Raw
 error messages, HTML/JSON response bodies and error metadata are excluded because
 they may contain prompts or rejected completions. Responses are limited to one
-MiB. HTTP rejections remain operational events, not GitHub bug reports. See the
+MiB. HTTP rejections remain operational log events and also create GitHub issues
+containing fixed diagnostics and HTTP status, without provider/SDK message text. See the
 [routing rules](operations.md#openrouter-routing-and-diagnostics).
+
+
+Queued AI processing stores the pending prompt in the same owner-bound YDB
+conversation row as history. Queue messages carry only an owner ID and event hash;
+worker trigger logs omit raw payload bodies. The worker receives the OpenRouter
+credential through Lockbox and uses the same runtime routing settings as the
+webhook. `/ai-status` exposes only the caller's fixed stage/failure metadata and
+correlation ID. Pending text is cleared on completion, reset or expiry handling;
+there is no native database TTL for that JSON field.

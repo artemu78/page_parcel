@@ -1,10 +1,11 @@
 import * as http from 'node:http';
 import { Logger, defaultLogger, metrics, flushExceptionReports } from '@readable-web/observability';
 import { JobProcessor } from './job-processor.js';
-import { JobQueueMessage } from '@readable-web/jobs';
+import { JobQueueMessage, AiQueueMessage } from '@readable-web/jobs';
 
 export interface WorkerServerOptions {
   port?: number;
+  processAiRequest?: (message: AiQueueMessage) => Promise<{ retryable: boolean }>;
   processor: JobProcessor;
   logger?: Logger;
   triggerSecret?: string;
@@ -13,6 +14,7 @@ export interface WorkerServerOptions {
 export class WorkerServer {
   private server: http.Server;
   private port: number;
+  private processAiRequest?: WorkerServerOptions['processAiRequest'];
   private processor: JobProcessor;
   private logger: Logger;
   private triggerSecret?: string;
@@ -20,6 +22,7 @@ export class WorkerServer {
   constructor(options: WorkerServerOptions) {
     this.port = options.port ?? (Number.parseInt(process.env.PORT || process.env.WORKER_PORT || '8080', 10));
     this.processor = options.processor;
+    this.processAiRequest = options.processAiRequest;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'WorkerServer' });
     this.triggerSecret = options.triggerSecret;
 
@@ -99,26 +102,38 @@ export class WorkerServer {
             return;
           }
 
-          this.logger.info(`Received trigger payload: ${bodyStr.slice(0, 500)}`);
+          this.logger.info('Received queue trigger');
 
           let jobIds: string[] = [];
+          const aiRequests: AiQueueMessage[] = [];
+          const acceptAi = (value: any): boolean => {
+            if (value?.kind !== 'ai') return false;
+            if (!Number.isSafeInteger(value.ownerId) || value.ownerId <= 0 || typeof value.eventId !== 'string' || !/^[a-f0-9]{64}$/.test(value.eventId)) {
+              throw new Error('Invalid AI queue reference');
+            }
+            aiRequests.push({ kind: 'ai', ownerId: value.ownerId, eventId: value.eventId });
+            return true;
+          };
 
           // 1. Check messages array (standard YMQ trigger)
           if (Array.isArray(bodyJson?.messages) && bodyJson.messages.length > 0) {
             for (const msg of bodyJson.messages) {
               const rawBody = msg?.details?.body ?? msg?.details?.message?.body ?? msg?.body ?? msg?.details?.message;
               if (rawBody) {
+                if (typeof rawBody === 'object' && acceptAi(rawBody)) continue;
                 if (typeof rawBody === 'object' && rawBody.jobId) {
                   jobIds.push(rawBody.jobId);
                 } else if (typeof rawBody === 'string') {
                   try {
                     const parsedMsg = JSON.parse(rawBody) as JobQueueMessage;
+                    if (acceptAi(parsedMsg)) continue;
                     if (parsedMsg.jobId) jobIds.push(parsedMsg.jobId);
                   } catch {
                     // Try base64
                     try {
                       const decoded = Buffer.from(rawBody, 'base64').toString('utf-8');
                       const parsed = JSON.parse(decoded) as JobQueueMessage;
+                      if (acceptAi(parsed)) continue;
                       if (parsed.jobId) jobIds.push(parsed.jobId);
                     } catch {
                       if (rawBody.startsWith('job_')) jobIds.push(rawBody);
@@ -127,12 +142,14 @@ export class WorkerServer {
                 }
               }
             }
+          } else if (acceptAi(bodyJson)) {
+            // Direct internal trigger form.
           } else if (bodyJson?.jobId) {
             jobIds.push(bodyJson.jobId);
           }
 
           // 2. Fallback: extract any job ID matching pattern job_<timestamp>_<hash>
-          if (jobIds.length === 0) {
+          if (jobIds.length === 0 && aiRequests.length === 0) {
             const matches = bodyStr.match(/job_\d+_[a-z0-9]+/g);
             if (matches && matches.length > 0) {
               jobIds = Array.from(new Set(matches));
@@ -140,8 +157,8 @@ export class WorkerServer {
             }
           }
 
-          if (jobIds.length === 0) {
-            this.logger.warn(`Trigger payload contained no recognized job IDs: ${bodyStr}`);
+          if (jobIds.length === 0 && aiRequests.length === 0) {
+            this.logger.warn('Trigger payload contained no recognized jobs');
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ status: 'ignored', reason: 'no_jobs' }));
             return;
@@ -150,6 +167,10 @@ export class WorkerServer {
           // Process jobs sequentially (trigger configured with batch size 1)
           let hasRetryableFailure = false;
 
+          for (const message of aiRequests) {
+            if (!this.processAiRequest) throw new Error('AI queue processor is not configured');
+            if ((await this.processAiRequest(message)).retryable) hasRetryableFailure = true;
+          }
           for (const jobId of jobIds) {
             const outcome = await this.processor.processJob(jobId);
             if (outcome.retryable) {
@@ -165,7 +186,7 @@ export class WorkerServer {
           } else {
             // Return 200 OK so YMQ trigger deletes message
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'ok', processed: jobIds.length }));
+            res.end(JSON.stringify({ status: 'ok', processed: jobIds.length + aiRequests.length }));
           }
         } catch (err) {
           this.logger.exception(err, 'Error processing trigger payload');

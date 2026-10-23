@@ -1,4 +1,4 @@
-/** A received upstream response is operational information, not a code exception. */
+/** A received upstream response stays operational in logs and is also reported to GitHub. */
 export declare class UpstreamResponseError extends Error {
     readonly service: string;
     readonly statusCode: number;

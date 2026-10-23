@@ -2,7 +2,10 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Job, JobQueueMessage } from './types.js';
 import { Logger, defaultLogger } from '@readable-web/observability';
 
+export interface AiQueueMessage { kind: 'ai'; ownerId: number; eventId: string }
+
 export interface QueueClient {
+  publishAiRequest?(message: AiQueueMessage): Promise<void>;
   publishJob(job: Job): Promise<void>;
 }
 
@@ -31,6 +34,15 @@ export class SqsQueueClient implements QueueClient {
       endpoint: options.endpoint ?? 'https://message-queue.api.cloud.yandex.net',
       credentials: options.credentials
     });
+  }
+
+  public async publishAiRequest(message: AiQueueMessage): Promise<void> {
+    await this.client.send(new SendMessageCommand({
+      QueueUrl: this.queueUrl, MessageBody: JSON.stringify(message),
+      ...(this.queueUrl.endsWith('.fifo') ? {
+        MessageDeduplicationId: message.eventId, MessageGroupId: `user_${message.ownerId}`
+      } : {})
+    }));
   }
 
   public async publishJob(job: Job): Promise<void> {
@@ -65,6 +77,8 @@ export class SqsQueueClient implements QueueClient {
 
 export class MemoryQueueClient implements QueueClient {
   public messages: JobQueueMessage[] = [];
+  public aiMessages: AiQueueMessage[] = [];
+  public async publishAiRequest(message: AiQueueMessage): Promise<void> { this.aiMessages.push(structuredClone(message)); }
 
   public async publishJob(job: Job): Promise<void> {
     this.messages.push({

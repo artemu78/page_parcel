@@ -10,7 +10,8 @@
     { "path": "../../packages/jobs" },
     { "path": "../../packages/rendering" },
     { "path": "../../packages/pdf" },
-    { "path": "../../packages/vk" }
+    { "path": "../../packages/vk" },
+    { "path": "../webhook" }
   ],
   "include": ["src/**/*"]
 }

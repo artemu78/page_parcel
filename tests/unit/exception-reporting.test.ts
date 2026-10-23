@@ -73,16 +73,18 @@ test('ambiguous POST success is recovered through issue marker, without another 
   assert.equal(outbox.reports.size, 0);
 });
 
-test('upstream response and SDK HTTP failures stay Info, code errors report despite log threshold', async () => {
+test('upstream and SDK failures report despite Info logging and log threshold', async () => {
   const captures: unknown[] = [];
   setExceptionReporter({ capture: error => { captures.push(error); }, flush: async () => {} });
   try {
     const logger = new Logger('error').child({ service: 'webhook' });
-    logger.exception(new UpstreamResponseError('HTTP 429', 'OpenRouter', 429), 'Complete request');
-    logger.exception(Object.assign(new Error('HTTP 500'), { $metadata: { httpStatusCode: 500 } }), 'Publish queue');
+    const upstream = new UpstreamResponseError('HTTP 429', 'OpenRouter', 429);
+    const sdk = Object.assign(new Error('HTTP 500'), { $metadata: { httpStatusCode: 500 } });
+    logger.exception(upstream, 'Complete request');
+    logger.exception(sdk, 'Publish queue');
     const codeError = new TypeError('bad state');
     logger.exception(codeError, 'Handle event');
-    assert.deepEqual(captures, [codeError]);
+    assert.deepEqual(captures, [upstream, sdk, codeError]);
   } finally { setExceptionReporter(undefined); }
 });
 
@@ -189,4 +191,54 @@ test('error text redacts configured credentials, preserves Markdown fences, and 
     if (previous === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = previous;
     if (version === undefined) delete process.env.APP_VERSION; else process.env.APP_VERSION = version;
   }
+});
+
+
+test('upstream rejections create one durable issue without provider messages or metadata', async () => {
+  const outbox = new Outbox();
+  const posts: any[] = [];
+  const reporter = new GitHubExceptionReporter({ token: 'token', repository: 'owner/repo', outbox,
+    fetch: (async (_url, init) => {
+      if (init?.method === 'POST') { posts.push(JSON.parse(String(init.body))); return new Response('{}', { status: 503 }); }
+      return new Response('[]');
+    }) as typeof fetch });
+  const upstream = new UpstreamResponseError('PRIVATE PROMPT AND PROVIDER BODY', 'OpenRouter', 403);
+  reporter.capture(upstream, 'AI chat completion failed', { service: 'webhook', requestId: 'event-123' });
+  reporter.capture(upstream, 'Parent catch', {});
+  await reporter.flush();
+  assert.equal(posts.length, 1);
+  assert.equal(outbox.reports.size, 1);
+  assert.match(posts[0].body, /403/);
+  assert.match(posts[0].body, /OpenRouter/);
+  assert.match(posts[0].body, /event-123/);
+  assert.doesNotMatch(JSON.stringify([...outbox.reports.values()]), /PRIVATE PROMPT AND PROVIDER BODY/);
+  const sdk = buildExceptionReport(Object.assign(new Error('PRIVATE SDK RESPONSE'), {
+    $metadata: { httpStatusCode: 503, privateField: 'PRIVATE METADATA' }
+  }), 'Read settings', {});
+  assert.match(sdk.body, /503/);
+  assert.doesNotMatch(sdk.body, /PRIVATE SDK RESPONSE|PRIVATE METADATA/);
+});
+
+test('outbox failure does not block direct GitHub delivery and retries retain the report marker', async () => {
+  const remote: any[] = [];
+  let available = false;
+  let posts = 0;
+  const outbox: ExceptionOutbox = {
+    async save() { throw new Error('YDB unavailable'); },
+    async pending() { throw new Error('YDB unavailable'); },
+    async remove() { throw new Error('YDB unavailable'); }
+  };
+  const reporter = new GitHubExceptionReporter({ token: 'token', repository: 'owner/repo', outbox,
+    fetch: (async (_url, init) => {
+      if (!available) return new Response('{}', { status: 503 });
+      if (init?.method === 'POST') { posts++; remote.push(JSON.parse(String(init.body))); return new Response('{}', { status: 201 }); }
+      return new Response(JSON.stringify(remote));
+    }) as typeof fetch });
+  reporter.capture(new Error('boom'), 'Handle event', {});
+  await reporter.flush();
+  available = true;
+  await reporter.flush();
+  assert.equal(posts, 1);
+  await reporter.flush();
+  assert.equal(posts, 1);
 });

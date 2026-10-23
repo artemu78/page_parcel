@@ -1,8 +1,10 @@
 import { it } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { MemorySearchStore, MemoryConversationStore, MemoryJobStore, MemoryQueueClient, OutboxService, HISTORY_TTL_MS, trimHistory, YdbConversationStore } from '../../packages/jobs/dist/index.js';
 import { createModeKeyboard } from '../../packages/vk/dist/index.js';
 import { WebhookHandler } from '../../apps/webhook/dist/handler.js';
+import { GitHubExceptionReporter, setExceptionReporter, flushExceptionReports, UpstreamResponseError } from '../../packages/observability/dist/index.js';
 import { parseCommand } from '../../apps/webhook/dist/commands.js';
 
 function setup(complete: (params: any) => Promise<string> = async () => 'Hello', available = true) {
@@ -229,4 +231,191 @@ it('model switching fences pending replies and blocked owners cannot select mode
   await f.jobs.setUserStatus(owner, 1);
   await f.send(4, '/model sol-low', undefined, owner);
   assert.equal((await f.conversations.get(owner)).modelKey, 'astra');
+});
+
+
+it('AI upstream failures and empty completions post sanitized GitHub issues and notify the user', async () => {
+  const posts: any[] = [];
+  const reporter = new GitHubExceptionReporter({ token: 'token', repository: 'owner/repo', service: 'webhook',
+    fetch: (async (_url, init) => {
+      if (init?.method === 'POST') { posts.push(JSON.parse(String(init.body))); return new Response('{}', { status: 201 }); }
+      return new Response('[]');
+    }) as typeof fetch });
+  setExceptionReporter(reporter);
+  try {
+    for (const complete of [async () => { throw new UpstreamResponseError('PRIVATE PROVIDER BODY', 'OpenRouter', 403); }, async () => '']) {
+      const f = setup(complete);
+      await f.send(1, '', { command: 'mode', mode: 'ai' });
+      await f.send(2, 'PRIVATE USER PROMPT');
+      await flushExceptionReports();
+      assert.match(f.replies.at(-1).message, /Не удалось/);
+      assert.equal((await f.conversations.get(42)).pending, undefined);
+    }
+    assert.equal(posts.length, 2);
+    assert.ok(posts.every(p => p.title.includes('AI chat completion failed') && p.body.includes(createHash('sha256').update('42:event-42-2').digest('hex'))));
+    assert.doesNotMatch(JSON.stringify(posts), /PRIVATE PROVIDER BODY|PRIVATE USER PROMPT/);
+  } finally { setExceptionReporter(undefined); }
+});
+
+it('public callback does not acknowledge while message processing is still detached', async () => {
+  const f = setup();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const handler = new WebhookHandler({ jobStore: f.jobs, conversationStore: f.conversations,
+    outboxService: new OutboxService({ jobStore: f.jobs, queueClient: new MemoryQueueClient() }),
+    vkClient: { sendMessage: async () => { await gate; return 1; } } as any,
+    validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+  let acknowledged = false;
+  const pending = handler.handleRequest({ type: 'message_new', group_id: 1, event_id: 'lifecycle',
+    object: { message: { id: 700, peer_id: 42, from_id: 42, text: '/version' } } }).then(result => { acknowledged = true; return result; });
+  await new Promise(resolve => setImmediate(resolve));
+  const early = acknowledged;
+  release(); await pending;
+  assert.equal(early, false, 'callback returned before its message or error reporting finished');
+});
+
+it('queues AI before callback acknowledgment and worker alone generates and checkpoints the reply', async () => {
+  const jobs = new MemoryJobStore(); const conversations = new MemoryConversationStore();
+  const queue = new MemoryQueueClient(); const replies: any[] = []; const typing: number[] = []; let calls = 0;
+  const options = { jobStore: jobs, conversationStore: conversations,
+    outboxService: new OutboxService({ jobStore: jobs, queueClient: queue }),
+    vkClient: { setTyping: async (peerId: number) => { typing.push(peerId); }, sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+    openRouterClient: { complete: async () => { calls++; return 'Worker answer'; } } as any,
+    validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } };
+  const webhook = new WebhookHandler({ ...options, publishAiRequest: queue.publishAiRequest.bind(queue) });
+  const callback = (id: number, text: string) => webhook.handleRequest({ type: 'message_new', group_id: 1,
+    event_id: `queue-${id}`, object: { message: { id, peer_id: 42, from_id: 42, text } } });
+  await callback(1, '💬 Чат с ИИ');
+  await callback(2, 'PRIVATE QUEUED PROMPT');
+  assert.equal(calls, 0); assert.equal(queue.aiMessages.length, 1);
+  assert.deepEqual(typing, [42]);
+  assert.ok(replies.every(r => !r.message.includes('Запрос принят')));
+  assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'queued');
+  assert.doesNotMatch(JSON.stringify(queue.aiMessages), /PRIVATE QUEUED PROMPT/);
+  await callback(2, 'PRIVATE QUEUED PROMPT'); // Crash/retry between reservation and queue publication can republish safely.
+  const worker = new WebhookHandler(options);
+  await worker.processQueuedAiRequest(queue.aiMessages[0]);
+  await worker.processQueuedAiRequest(queue.aiMessages[1]);
+  assert.equal(calls, 1);
+  assert.equal((await conversations.get(42)).pending, undefined);
+  assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'completed');
+  assert.match(replies.at(-1).message, /Worker answer/);
+  await callback(3, '/ai-status');
+  assert.match(replies.at(-1).message, /ответ отправлен/);
+  assert.doesNotMatch(replies.at(-1).message, /PRIVATE QUEUED PROMPT|Worker answer/);
+});
+
+it('public callback sends a fallback and flushes reporting even when database access fails', async () => {
+  const jobs = new MemoryJobStore(); jobs.getUser = async () => { throw new Error('Database unavailable'); };
+  const replies: any[] = []; let flushed = false; let captured = 0;
+  setExceptionReporter({ capture() { captured++; }, async flush() { flushed = true; } });
+  try {
+    const handler = new WebhookHandler({ jobStore: jobs,
+      conversationStore: { get: async () => { throw new Error('Conversation unavailable'); }, compareAndSet: async () => false },
+      outboxService: new OutboxService({ jobStore: jobs, queueClient: new MemoryQueueClient() }),
+      vkClient: { sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+      validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+    const result = await handler.handleRequest({ type: 'message_new', group_id: 1, event_id: 'db-fail',
+      object: { message: { id: 10, from_id: 42, peer_id: 42, text: 'PRIVATE PROMPT' } } });
+    assert.equal(result.statusCode, 200); assert.equal(captured, 1); assert.equal(flushed, true);
+    assert.match(replies.at(-1).message, /Не удалось обработать/);
+  } finally { setExceptionReporter(undefined); }
+});
+
+it('failed queue publication notifies chat, reports failure and permits retry', async () => {
+  const jobs = new MemoryJobStore(); const conversations = new MemoryConversationStore(); const replies: any[] = [];
+  const state = await conversations.get(42); await conversations.compareAndSet(42, state.version, { ...state, mode: 'ai' });
+  let calls = 0; const captures: string[] = [];
+  setExceptionReporter({ capture(_e, operation) { captures.push(operation); }, async flush() {} });
+  try {
+    const handler = new WebhookHandler({ jobStore: jobs, conversationStore: conversations,
+      outboxService: new OutboxService({ jobStore: jobs, queueClient: new MemoryQueueClient() }),
+      publishAiRequest: async () => { calls++; throw new Error('Queue unavailable'); },
+      vkClient: { sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+      validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+    const event = { type: 'message_new', group_id: 1, event_id: 'queue-failure', object: { message: { id: 1, from_id: 42, peer_id: 42, text: 'Hello' } } };
+    await handler.handleRequest(event); await handler.handleRequest(event);
+    assert.equal(calls, 2); assert.ok(captures.includes('Queue AI request'));
+    assert.match(replies.at(-1).message, /Не удалось поставить/);
+    assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'failed');
+    assert.equal((await conversations.get(42)).pending, undefined);
+  } finally { setExceptionReporter(undefined); }
+});
+
+it('expired queued attempts report interruption and tell the owner without calling the provider', async () => {
+  const jobs = new MemoryJobStore(); const conversations = new MemoryConversationStore(); const replies: any[] = [];
+  const eventId = 'a'.repeat(64); const state = await conversations.get(42);
+  await conversations.compareAndSet(42, 0, { ...state, mode: 'ai', pending: { eventId, expiresAt: 1, prompt: 'PRIVATE', stage: 'processing' } });
+  const captures: string[] = []; setExceptionReporter({ capture(_e, operation) { captures.push(operation); }, async flush() {} });
+  try {
+    const worker = new WebhookHandler({ jobStore: jobs, conversationStore: conversations,
+      outboxService: new OutboxService({ jobStore: jobs, queueClient: new MemoryQueueClient() }),
+      openRouterClient: { complete: async () => { throw new Error('Provider must not run'); } } as any,
+      vkClient: { sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+      validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+    assert.equal((await worker.processQueuedAiRequest({ kind: 'ai', ownerId: 42, eventId })).retryable, false);
+    assert.ok(captures.includes('AI request interrupted'));
+    assert.match(replies.at(-1).message, /прервана/);
+    assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'interrupted');
+    assert.equal((await conversations.get(42)).pending, undefined);
+  } finally { setExceptionReporter(undefined); }
+});
+
+it('worker provider failures leave failed status and report, while a reset fences queued prompts', async () => {
+  const jobs = new MemoryJobStore(); const conversations = new MemoryConversationStore(); const queue = new MemoryQueueClient();
+  const replies: any[] = []; const captures: any[] = [];
+  const options = { jobStore: jobs, conversationStore: conversations,
+    outboxService: new OutboxService({ jobStore: jobs, queueClient: queue }),
+    vkClient: { sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+    validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } };
+  const webhook = new WebhookHandler({ ...options, publishAiRequest: queue.publishAiRequest.bind(queue) });
+  let calls = 0;
+  const worker = new WebhookHandler({ ...options, openRouterClient: { complete: async () => { calls++; throw new UpstreamResponseError('PRIVATE', 'OpenRouter', 403); } } as any });
+  const send = (id: number, text: string) => webhook.handleRequest({ type: 'message_new', group_id: 1, event_id: `failure-${id}`,
+    object: { message: { id, peer_id: 42, from_id: 42, text } } });
+  setExceptionReporter({ capture(error, operation) { captures.push({ error, operation }); }, async flush() {} });
+  try {
+    await send(1, '💬 Чат с ИИ'); await send(2, 'Hello');
+    await worker.processQueuedAiRequest(queue.aiMessages[0]);
+    assert.match(replies.at(-1).message, /Не удалось/);
+    assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'failed');
+    assert.ok(captures.some(c => c.operation === 'AI chat completion failed'));
+    await send(30, '/ai-status');
+    assert.match(replies.at(-1).message, /provider_failure/);
+    assert.match(replies.at(-1).message, /HTTP: 403/);
+    await send(3, 'Another'); await send(4, 'Новый разговор');
+    await worker.processQueuedAiRequest(queue.aiMessages[1]);
+    assert.equal(calls, 1); assert.equal((await conversations.get(42)).pending, undefined);
+  } finally { setExceptionReporter(undefined); }
+});
+
+it('renews typing during generation, reports typing failures without aborting and stops before the answer', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const jobs = new MemoryJobStore(); const conversations = new MemoryConversationStore(); const replies: any[] = [];
+  const state = await conversations.get(42);
+  await conversations.compareAndSet(42, 0, { ...state, mode: 'ai' });
+  let typingCalls = 0; let release!: (reply: string) => void;
+  const captures: string[] = [];
+  setExceptionReporter({ capture(_e, operation) { captures.push(operation); }, async flush() {} });
+  try {
+    const handler = new WebhookHandler({ jobStore: jobs, conversationStore: conversations,
+      outboxService: new OutboxService({ jobStore: jobs, queueClient: new MemoryQueueClient() }),
+      vkClient: { setTyping: async () => { typingCalls++; if (typingCalls === 1) throw new UpstreamResponseError('Forbidden', 'VK', 403); },
+        sendMessage: async (p: any) => { replies.push(p); return 1; } } as any,
+      openRouterClient: { complete: () => new Promise<string>(resolve => { release = resolve; }) } as any,
+      validationOptions: { expectedGroupId: 1, confirmationCode: 'ok' } });
+    const processing = (handler as any).processMessageEvent({ type: 'message_new', group_id: 1, event_id: 'typing-renewal',
+      object: { message: { id: 1, from_id: 42, peer_id: 42, text: 'Hello' } } });
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typingCalls, 1); assert.ok(captures.includes('Set VK typing activity'));
+    t.mock.timers.tick(7000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typingCalls, 2);
+    release('Answer'); await processing;
+    assert.match(replies.at(-1).message, /Answer/);
+    t.mock.timers.tick(21000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typingCalls, 2);
+    assert.equal((await conversations.get(42)).lastAiRequest?.stage, 'completed');
+  } finally { t.mock.timers.reset(); setExceptionReporter(undefined); }
 });
