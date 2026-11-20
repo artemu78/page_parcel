@@ -1,4 +1,4 @@
-# AWS Lambda Reverse Proxy for OpenRouter
+# AWS Lambda Reverse Proxy for OpenRouter and Telegram
 
 This serverless function acts as a dedicated reverse proxy forwarding requests to `https://openrouter.ai`.
 
@@ -81,3 +81,32 @@ value. This Lambda endpoint is a reverse proxy; `Proxy`/`OpenRouterProxy` instea
 configures a separate forward HTTP proxy and should not contain the Lambda URL.
 See [routing diagnostics](../../docs/operations.md#openrouter-routing-and-diagnostics)
 for safe log fields and the intentional absence of GitHub issues for HTTP 403.
+
+## Destination routing
+
+The deployed endpoint is an API Gateway URL (`ProxyApiUrl`), not a Lambda Function URL.
+No `destination` parameter preserves the OpenRouter route. Explicit
+`destination=openrouter` selects `https://openrouter.ai`; `destination=telegram`
+selects `https://api.telegram.org`. Unknown, empty, or repeated destination values
+return HTTP 400. The selector is removed before forwarding other query parameters.
+Method, path, request body, and the existing header filtering are preserved.
+Redirects are rejected so requests cannot escape the selected upstream.
+
+Example Telegram request: POST `/bot<TOKEN>/sendMessage?destination=telegram`
+with JSON `{"chat_id":"<CHAT_ID>","text":"Hello"}`. Never publish a real token.
+Proxy-generated failures return a fixed error and log only the selected destination
+and a fixed category; raw errors and upstream URLs are not logged by the handler.
+Any API Gateway access logging must also avoid token-bearing paths.
+
+Deploy from this directory with `sam build` followed by `sam deploy`.
+Run the isolated proxy tests with `node --test infra/aws-proxy/test/*.test.mjs`
+from the repository root.
+
+## Deployed version
+
+GET `/?version` returns `{"service":"aws-reverse-proxy","version":"1.0.35"}`
+without calling either upstream. The response disables caching. `?version=1`
+is also supported, optionally combined with a valid destination selector.
+POST requests continue to be forwarded; OPTIONS keeps its preflight behavior.
+The version is packaged in `src/index.mjs` and tested against the root package version;
+update both when bumping the proxy version. Redeploy AWS to expose the new version.

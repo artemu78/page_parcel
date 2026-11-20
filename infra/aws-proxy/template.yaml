@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: AWS Lambda Reverse Proxy for OpenRouter API
+Description: AWS Lambda Reverse Proxy for OpenRouter and Telegram APIs
 
 Resources:
   OpenRouterProxyFunction:
@@ -14,7 +14,7 @@ Resources:
       MemorySize: 256
       Architectures:
         - arm64
-      Description: Reverse proxy forwarding requests to openrouter.ai
+      Description: Reverse proxy for OpenRouter and Telegram
       Events:
         ProxyApi:
           Type: HttpApi
@@ -29,5 +29,5 @@ Resources:
 
 Outputs:
   ProxyApiUrl:
-    Description: Public HTTP API endpoint for OpenRouter Proxy
+    Description: Public HTTP API endpoint for OpenRouter and Telegram Proxy
     Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"

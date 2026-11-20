@@ -1,8 +1,26 @@
 /**
- * AWS Lambda Reverse Proxy for OpenRouter API
- * Forwards requests to https://openrouter.ai and returns the response.
+ * AWS Lambda Reverse Proxy for OpenRouter and Telegram APIs
+ * Defaults to OpenRouter; destination=telegram selects the Telegram Bot API.
  */
+export const PROXY_VERSION = '1.0.35';
+
 export async function handler(event) {
+  const query = new URLSearchParams(event.rawQueryString ?? new URLSearchParams(event.queryStringParameters || {}).toString());
+  const destinations = query.getAll('destination');
+  const destination = destinations.length === 0 ? 'openrouter' : destinations[0];
+  const upstreams = new Map([
+    ['openrouter', 'https://openrouter.ai'],
+    ['telegram', 'https://api.telegram.org'],
+  ]);
+  if (destinations.length > 1 || !upstreams.has(destination)) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: 'Invalid destination; use openrouter or telegram' }),
+    };
+  }
+  query.delete('destination');
+
   // Handle CORS preflight requests
   const method = (event.requestContext?.http?.method || event.httpMethod || 'GET').toUpperCase();
   if (method === 'OPTIONS') {
@@ -16,10 +34,25 @@ export async function handler(event) {
     };
   }
 
+  if (method === 'GET' && query.has('version')) {
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store',
+      },
+      body: JSON.stringify({ service: 'aws-reverse-proxy', version: PROXY_VERSION }),
+      isBase64Encoded: false,
+    };
+  }
+
   try {
     const rawPath = event.rawPath || event.path || '/';
-    const queryString = event.rawQueryString || '';
-    const targetUrl = new URL(rawPath + (queryString ? `?${queryString}` : ''), 'https://openrouter.ai');
+    const targetUrl = new URL(upstreams.get(destination));
+    // Assign the path rather than resolving it: //host and absolute URLs cannot change the origin.
+    targetUrl.pathname = rawPath;
+    targetUrl.search = query.toString();
 
     // Filter incoming headers to forward
     const forwardHeaders = {};
@@ -59,7 +92,7 @@ export async function handler(event) {
       method,
       headers: forwardHeaders,
       body,
-      redirect: 'follow'
+      redirect: 'error'
     });
 
     const responseHeaders = {
@@ -93,8 +126,9 @@ export async function handler(event) {
       body: text,
       isBase64Encoded: false
     };
-  } catch (err) {
-    console.error('Proxy request failed:', err);
+  } catch {
+    // Raw fetch exceptions can include Telegram tokens in request paths.
+    console.error('Proxy request failed', { destination, category: 'upstream_request_failed' });
     return {
       statusCode: 502,
       headers: {
@@ -103,7 +137,7 @@ export async function handler(event) {
       },
       body: JSON.stringify({
         error: 'Proxy Bad Gateway',
-        message: err.message
+        message: 'Upstream request failed'
       })
     };
   }
