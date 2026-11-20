@@ -19,6 +19,18 @@ import { Logger, defaultLogger, metrics, UpstreamResponseError } from '@readable
 import { parseCommand, GREETING_MESSAGE, HELP_MESSAGE, formatVersionMessage } from './commands.js';
 import { OpenRouterClient, splitMessage } from './openrouter.js';
 
+const HOURLY_RATE_WINDOW_MS = 60 * 60 * 1000;
+const rateLimitTime = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow',
+  dateStyle: 'short',
+  timeStyle: 'medium'
+});
+
+function rateLimitNotice(retryAt: number): string {
+  const availableAt = rateLimitTime.format(Math.ceil(retryAt / 1000) * 1000);
+  return `⏳ Ваш лимит исчерпан. Следующий запрос будет доступен ${availableAt} (мск).`;
+}
+
 export interface WebhookHandlerOptions {
   publishAiRequest?: (message: AiQueueMessage) => Promise<void>;
   conversationStore?: ConversationStore;
@@ -30,7 +42,6 @@ export interface WebhookHandlerOptions {
   openRouterClient?: Pick<OpenRouterClient, 'complete'>;
   validationOptions: CallbackValidationOptions;
   logger?: Logger;
-  maxUserRequestsPerMinute?: number;
 }
 
 export class WebhookHandler {
@@ -44,7 +55,6 @@ export class WebhookHandler {
   private vkClient?: VkApiClient;
   private validationOptions: CallbackValidationOptions;
   private logger: Logger;
-  private maxRequestsPerMinute: number;
 
   constructor(options: WebhookHandlerOptions) {
     this.publishAiRequest = options.publishAiRequest;
@@ -57,7 +67,6 @@ export class WebhookHandler {
     this.vkClient = options.vkClient;
     this.validationOptions = options.validationOptions;
     this.logger = (options.logger ?? defaultLogger).child({ component: 'WebhookHandler' });
-    this.maxRequestsPerMinute = options.maxUserRequestsPerMinute ?? 10;
   }
 
   public async handleRequest(
@@ -386,12 +395,14 @@ export class WebhookHandler {
       await typingRefresh;
     };
     try {
-      const rate = await this.jobStore.checkAndConsumeRateLimit(ownerId, this.maxRequestsPerMinute, 60000);
+      const settings = await this.jobStore.getSettings();
+      const rate = await this.jobStore.checkAndConsumeRateLimit(
+        ownerId, settings.maxUserRequestsPerHour, HOURLY_RATE_WINDOW_MS
+      );
       if (!rate.allowed) {
-        await this.sendReply(peerId, `💬 Слишком много запросов. Подождите ${rate.retryAfterSeconds} сек.`, `ai_limit_${eventId}`);
+        await this.sendReply(peerId, rateLimitNotice(rate.retryAt), `ai_limit_${eventId}`);
         return;
       }
-      const settings = await this.jobStore.getSettings();
       if (!this.openRouterClient) throw new Error('AI provider is not configured');
       const selection = selectedModel(ownerId, reserved.modelKey);
       phase = 'provider';
@@ -405,7 +416,7 @@ export class WebhookHandler {
       const reply = await this.openRouterClient.complete({ prompt, history: reserved.history,
         model: selection?.model ?? defaultModelFor(ownerId, settings.openRouterModel),
         reasoningEffort: selection?.reasoningEffort, baseUrl: settings.openRouterBaseUrl,
-        proxyUrl: settings.openRouterProxy, maxTokens: 2000,
+        proxyUrl: settings.openRouterProxy, maxTokens: 10_000,
         systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. Утверждай, что проверил сведения в интернете, только если использовал веб-поиск.' });
       await stopTyping();
       if (!reply.trim()) throw new UpstreamResponseError('Empty AI completion', 'OpenRouter', 200);
@@ -546,10 +557,9 @@ export class WebhookHandler {
     await this.jobStore.upsertUserAccess?.(fromId, `https://vk.com/id${fromId}`).catch(err => { this.logger.exception(err, 'Update user access'); });
 
     // 3. Rate limiting (atomic)
+    const settings = await this.jobStore.getSettings();
     const rateCheck = await this.jobStore.checkAndConsumeRateLimit(
-      fromId,
-      this.maxRequestsPerMinute,
-      60000
+      fromId, settings.maxUserRequestsPerHour, HOURLY_RATE_WINDOW_MS
     );
 
     if (!rateCheck.allowed) {
@@ -557,7 +567,7 @@ export class WebhookHandler {
       metrics.blockedDestinationsTotal.inc({ reason: 'RATE_LIMIT_EXCEEDED' });
       await this.sendReply(
         peerId,
-        `⏳ Слишком много запросов. Пожалуйста, подождите ${rateCheck.retryAfterSeconds} сек.`,
+        rateLimitNotice(rateCheck.retryAt),
         `ratelimit_${eventId}`
       );
       return;

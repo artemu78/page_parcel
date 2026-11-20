@@ -3,7 +3,7 @@ import { YdbSearchStore } from './search-store.js';
 import { YdbExceptionOutbox } from './exception-outbox.js';
 import { defaultLogger } from '@readable-web/observability';
 import { Driver, getCredentialsFromEnv, TypedValues, TypedData, AUTO_TX, TableDescription, Column, Types, StatusCode } from 'ydb-sdk';
-import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
+import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord, DEFAULT_MAX_USER_REQUESTS_PER_HOUR } from './types.js';
 import { JobStore, RateLimitResult } from './store.js';
 
 export interface YdbJobStoreOptions {
@@ -63,6 +63,23 @@ export class YdbJobStore implements JobStore {
             defaultLogger.exception(err, 'Initialize operational table');
           }
           // Table already exists or creation restricted
+        }
+
+        try {
+          await session.executeQuery(`
+            DECLARE $key AS Utf8;
+            DECLARE $value AS Utf8;
+            $existing = SELECT key FROM \`Settings\` WHERE key = $key;
+            UPSERT INTO \`Settings\`
+              SELECT $key AS key, $value AS value
+              FROM AS_TABLE(AsList(AsStruct(1 AS seed_row)))
+              WHERE NOT EXISTS (SELECT * FROM $existing);
+          `, {
+            '$key': TypedValues.utf8('MaxUserRequestsPerHour'),
+            '$value': TypedValues.utf8(String(DEFAULT_MAX_USER_REQUESTS_PER_HOUR))
+          }, AUTO_TX);
+        } catch (err) {
+          defaultLogger.exception(err, 'Initialize hourly request quota');
         }
 
         // 2. Users table
@@ -501,44 +518,37 @@ export class YdbJobStore implements JobStore {
     limit: number,
     windowMs: number
   ): Promise<RateLimitResult> {
-    return await this.driver.tableClient.withSession(async (session) => {
+    return this.driver.tableClient.withSessionRetry(async (session) => {
       const now = Date.now();
-      const cutoff = now - windowMs;
-
-      const countQuery = `
+      const result = await session.executeQuery(`
         DECLARE $user_id AS Int64;
+        DECLARE $now AS Int64;
         DECLARE $cutoff AS Int64;
-        SELECT count(*) AS total_count FROM rate_limits
-        WHERE user_id = $user_id AND timestamp > $cutoff;
-      `;
+        DECLARE $limit AS Uint64;
 
-      const res = await session.executeQuery(countQuery, {
+        $recent = SELECT timestamp FROM rate_limits
+          WHERE user_id = $user_id AND timestamp > $cutoff
+          ORDER BY timestamp DESC LIMIT $limit;
+        $usage = SELECT COUNT(*) AS used, MIN(timestamp) AS oldest, MAX(timestamp) AS newest
+          FROM $recent;
+        SELECT used, oldest FROM $usage;
+        UPSERT INTO rate_limits
+          SELECT $user_id AS user_id,
+            IF(COALESCE(newest, 0) >= $now, COALESCE(newest, 0) + 1, $now) AS timestamp
+          FROM $usage WHERE used < $limit;
+      `, {
         '$user_id': TypedValues.int64(userId),
-        '$cutoff': TypedValues.int64(cutoff)
+        '$now': TypedValues.int64(now),
+        '$cutoff': TypedValues.int64(now - windowMs),
+        '$limit': TypedValues.uint64(limit)
       }, AUTO_TX);
 
-      const rows = TypedData.createNativeObjects(res.resultSets[0]) as unknown as Array<{ total_count: any }>;
-      const total = Number(rows[0]?.total_count || 0);
+      const [usage] = TypedData.createNativeObjects(result.resultSets[0]) as unknown as
+        { used: number; oldest: number | null }[];
+      if (Number(usage.used) < limit) return { allowed: true };
 
-      if (total >= limit) {
-        return {
-          allowed: false,
-          retryAfterSeconds: Math.ceil(windowMs / 1000)
-        };
-      }
-
-      const insertQuery = `
-        DECLARE $user_id AS Int64;
-        DECLARE $timestamp AS Int64;
-        UPSERT INTO rate_limits (user_id, timestamp) VALUES ($user_id, $timestamp);
-      `;
-
-      await session.executeQuery(insertQuery, {
-        '$user_id': TypedValues.int64(userId),
-        '$timestamp': TypedValues.int64(now)
-      }, AUTO_TX);
-
-      return { allowed: true };
+      const retryAt = Number(usage.oldest) + windowMs;
+      return { allowed: false, retryAt, retryAfterSeconds: Math.ceil((retryAt - now) / 1000) };
     });
   }
 

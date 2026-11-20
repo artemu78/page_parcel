@@ -1,9 +1,8 @@
 import { Job, JobState, JobFailureCategory, CreateJobParams, AppSettings, parseSettingsMap, UserRecord, RoleRecord } from './types.js';
 
-export interface RateLimitResult {
-  allowed: boolean;
-  retryAfterSeconds?: number;
-}
+export type RateLimitResult =
+  | { allowed: true; retryAfterSeconds?: undefined }
+  | { allowed: false; retryAt: number; retryAfterSeconds: number };
 
 export interface JobStore {
   createJobIfNotExist(params: CreateJobParams): Promise<{ job: Job; isDuplicate: boolean }>;
@@ -211,9 +210,8 @@ export class MemoryJobStore implements JobStore {
     const validTimestamps = timestamps.filter(t => now - t < windowMs);
 
     if (validTimestamps.length >= limit) {
-      const oldestInWindow = validTimestamps[0];
-      const retryAfterSeconds = Math.ceil((oldestInWindow + windowMs - now) / 1000);
-      return { allowed: false, retryAfterSeconds };
+      const retryAt = validTimestamps[validTimestamps.length - limit] + windowMs;
+      return { allowed: false, retryAt, retryAfterSeconds: Math.ceil((retryAt - now) / 1000) };
     }
 
     validTimestamps.push(now);

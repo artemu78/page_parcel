@@ -60,7 +60,10 @@ export interface JobQueueMessage {
   attempts: number;
 }
 
+export const DEFAULT_MAX_USER_REQUESTS_PER_HOUR = 15;
+
 export interface AppSettings {
+  maxUserRequestsPerHour: number;
   adminId?: number;
   errorListeners: number[];
   maxRequestsPerJob?: number;
@@ -83,6 +86,10 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
     }
     return undefined;
   };
+
+  const hourlyLimit = Number(getVal('MaxUserRequestsPerHour'));
+  const maxUserRequestsPerHour = Number.isSafeInteger(hourlyLimit) && hourlyLimit > 0
+    ? hourlyLimit : DEFAULT_MAX_USER_REQUESTS_PER_HOUR;
 
   let maxRequestsPerJob: number | undefined;
   const maxReqRaw = getVal('MaxRequestsPerJob') ?? getVal('MaxRequests');
@@ -143,6 +150,7 @@ export function parseSettingsMap(map: Map<string, string> | Record<string, strin
   const pdfFormat = formatRaw && formatRaw.trim().length > 0 ? formatRaw.trim().toLowerCase() : undefined;
 
   return {
+    maxUserRequestsPerHour,
     adminId,
     errorListeners,
     maxRequestsPerJob,

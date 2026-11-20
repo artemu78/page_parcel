@@ -262,10 +262,14 @@ go to VK. Provider retention is independent of local context expiry. Do not log
 or report conversation content or model-generated search queries.
 
 Input is limited to 4000 characters; context to 12 recent user/assistant pairs and
-24000 characters. Generation requests use `max_tokens: 2000`, and replies are
+24000 characters. Generation requests use `max_tokens: 10000` per model call, and replies are
 split into chunks below 4000 characters, each marked «💬 Ответ ИИ». AI requests
-share the existing per-user minute quota with PDF requests; search keeps its own
-30-second cooldown. One AI request per user can be queued for up to five minutes; the worker claims
+share a per-user quota with PDF requests over a rolling hour. Set
+`MaxUserRequestsPerHour` in YDB `Settings` to a positive integer. The default is
+15. Startup creates this row if absent. Invalid values fall back to 15, and
+instances cache settings for up to 15 seconds. The limit notice shows when the next request becomes available
+in Moscow time. Search keeps its 30-second cooldown. One AI request per user
+can be queued for up to five minutes. The worker claims
 it for 90 seconds. The LangGraph model and tool calls share a 60-second wall-clock deadline.
 VK API method calls have a five-second deadline.
 Duplicate accepted AI events within the last 100 mode/free-text events do not call the

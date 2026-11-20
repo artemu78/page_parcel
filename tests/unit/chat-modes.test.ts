@@ -138,9 +138,10 @@ it('missing provider, long inputs and rate limits produce AI notices without sea
   const f = setup();
   await f.send(1, '', { command: 'mode', mode: 'ai' });
   await f.send(2, 'x'.repeat(4001)); assert.equal(f.prompts.length, 0);
-  for (let i = 0; i < 10; i++) await f.jobs.checkAndConsumeRateLimit(42, 10, 60000);
+  await f.jobs.setSetting('MaxUserRequestsPerHour', '2');
+  for (let i = 0; i < 2; i++) await f.jobs.checkAndConsumeRateLimit(42, 2, 3_600_000);
   await f.send(3, 'Hello'); assert.equal(f.prompts.length, 0);
-  assert.match(f.replies.at(-1).message, /Слишком много/);
+  assert.match(f.replies.at(-1).message, /Ваш лимит исчерпан.*Следующий запрос будет доступен .*\(мск\)/);
   assert.equal((await f.conversations.get(42)).pending, undefined);
 });
 

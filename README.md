@@ -11,6 +11,7 @@ Production-minded MVP of a VK community bot that converts public web articles an
   * In search mode, send a query as ordinary text: Serper results arrive with inline PDF buttons, seven per message and up to 20 per query. «Ещё» pages through cached results. Searches are limited to one per user every 30 seconds.
   * `/start` or «Начать»: short Russian introduction. The first free-text query and `message_allow` callback also trigger a greeting.
   * `/read <URL>`: Fetches the public article, extracts readable text and layout, creates a reader-style PDF, uploads it to VK Documents, and replies with a native document attachment in private VK messages.
+  * AI chat and PDF requests share a default limit of 15 requests per user per rolling hour.
   * `/status <job-id>`: Reports the current processing status, attempts, and safe error details (strictly accessible only to the job owner).
   * User `10487183` can choose GPT Sol 6.1 (low), GPT-6 Astra, or the default via «Модель ИИ» / `/model`. See [model selection](docs/operations.md#per-user-model-selection).
   * `/ai-status`: Shows your current mode, latest AI request stage, failure category/HTTP status when available, and correlation ID. AI requests show VK’s native typing indicator while the answer is being prepared.
