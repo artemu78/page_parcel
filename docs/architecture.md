@@ -181,9 +181,11 @@ existing PDF/search pipeline. Production stores mode and bounded context in YDB
 mode changes and context resets. The webhook persists the pending prompt in `conversations`, signals native VK typing,
 and publishes an AI reference (owner ID and event hash only) to the existing YMQ
 queue before acknowledging VK. The worker claims queued requests with a conversation version
-check and runs generation while its trigger invocation remains active. The existing
-OpenRouter client accepts recent user/assistant history and the configured model. AI chat does not invoke fetching,
-PDF generation or web search. See [operations](operations.md#8-chat-modes) for
+check and runs generation while its trigger invocation remains active. The worker's LangGraph client uses the
+existing OpenRouter transport with recent user/assistant history and the configured
+model. With Serper configured, the model can invoke one web search and receive the
+results before completing the reply. AI chat does not fetch result pages or
+generate PDFs. See [operations](operations.md#8-chat-modes) for
 retention and best-effort delivery limits.
 
 

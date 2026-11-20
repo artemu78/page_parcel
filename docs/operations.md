@@ -176,7 +176,7 @@ deployment with the configured token.
 In search mode, ordinary non-command text (up to 500 characters) searches Google via the third-party
 Serper API (`POST https://google.serper.dev/search`, `num: 20`, `hl: ru`).
 Set `SERPER_API_KEY` locally, or add `serper_api_key` to the selected Lockbox secret
-version for deployment; Terraform injects it into the webhook only. Keep all
+version for deployment. Terraform injects it into the webhook and worker. Keep all
 existing secret entries. Obtain the key at https://serper.dev/ and never commit it.
 Missing credentials, exhausted credits, HTTP failures and unsupported JSON produce
 a temporary unavailable notice. One provider request returns up to 20 organic
@@ -252,16 +252,21 @@ AI is available to all enabled users when `OPENROUTER_API_KEY` is configured
 (`openrouter_api_key` in the deployed Lockbox secret). Missing credentials produce
 an unavailable notice without silently searching. The `Model`/`OpenRouterModel`
 setting chooses the model. Base URL and forward proxy also use runtime settings; see the routing rules below.
-AI mode has no web-search tools. Prompts and recent replies go to OpenRouter and
-its selected provider, and replies go to VK; provider retention is independent of
-local context expiry. Do not log or report conversation content.
+The worker uses LangGraph to call OpenRouter. With `SERPER_API_KEY` configured,
+the selected OpenRouter model must support tool calling. It can request one
+public web search per reply. Serper receives the model-generated query (up to
+500 characters). Up to five validated results are returned to the model before
+it writes the final reply. Without a Serper key, the graph calls only OpenRouter.
+Prompts and recent replies go to OpenRouter and its selected provider, and replies
+go to VK. Provider retention is independent of local context expiry. Do not log
+or report conversation content or model-generated search queries.
 
 Input is limited to 4000 characters; context to 12 recent user/assistant pairs and
 24000 characters. Generation requests use `max_tokens: 2000`, and replies are
 split into chunks below 4000 characters, each marked «💬 Ответ ИИ». AI requests
 share the existing per-user minute quota with PDF requests; search keeps its own
 30-second cooldown. One AI request per user can be queued for up to five minutes; the worker claims
-it for 90 seconds. OpenRouter has a 60-second wall-clock and socket deadline.
+it for 90 seconds. The LangGraph model and tool calls share a 60-second wall-clock deadline.
 VK API method calls have a five-second deadline.
 Duplicate accepted AI events within the last 100 mode/free-text events do not call the
 provider again. Reset clears pending state, fencing late replies; changing mode

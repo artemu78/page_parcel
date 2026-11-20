@@ -3,7 +3,68 @@ import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import { MemoryJobStore, MemoryQueueClient, OutboxService } from '../../packages/jobs/dist/index.js';
 import { WebhookHandler } from '../../apps/webhook/dist/handler.js';
-import { OpenRouterClient, splitMessage } from '../../apps/webhook/dist/openrouter.js';
+import { LangGraphOpenRouterClient, OpenRouterClient, splitMessage } from '../../apps/webhook/dist/openrouter.js';
+
+describe('LangGraphOpenRouterClient', () => {
+  it('returns a search result to the selected model over the same runtime route', async () => {
+    const requests: Array<{ path?: string; body: any }> = [];
+    const result = { title: 'Example', url: 'https://example.com/', snippet: 'Public information' };
+    const reasoningDetails = [{ type: 'reasoning.encrypted', data: 'opaque' }];
+    const toolCall = {
+      id: 'call_search',
+      type: 'function',
+      function: { name: 'web_search', arguments: JSON.stringify({ query: 'public query' }) }
+    };
+    const server = http.createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      requests.push({ path: req.url, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+      const message = requests.length === 1
+        ? { content: null, tool_calls: [toolCall], reasoning_details: reasoningDetails }
+        : { content: '  Answer with a source  ' };
+      res.end(JSON.stringify({ choices: [{ message }] }));
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      const queries: string[] = [];
+      const client = new LangGraphOpenRouterClient({ apiKey: 'test', baseUrl: 'http://127.0.0.1:1' }, {
+        async search(query) {
+          queries.push(query);
+          return [result];
+        }
+      });
+
+      const history = [{ role: 'assistant' as const, content: 'Previous reply' }];
+      const reply = await client.complete({
+        prompt: 'Find a public source', history, model: 'test/tool-model', reasoningEffort: 'low',
+        maxTokens: 200, baseUrl: `http://127.0.0.1:${address.port}/api/v1/`, proxyUrl: ''
+      });
+
+      assert.equal(reply, 'Answer with a source');
+      assert.deepEqual(queries, ['public query']);
+      assert.equal(requests.length, 2);
+      for (const { path, body } of requests) {
+        assert.equal(path, '/api/v1/chat/completions');
+        assert.equal(body.model, 'test/tool-model');
+        assert.equal(body.max_tokens, 200);
+        assert.deepEqual(body.reasoning, { effort: 'low' });
+        assert.equal(body.tools[0].function.name, 'web_search');
+        assert.deepEqual(body.messages.slice(1, 3), [...history, { role: 'user', content: 'Find a public source' }]);
+      }
+      assert.equal(requests[0].body.tool_choice, 'auto');
+      assert.equal(requests[1].body.tool_choice, 'none');
+      assert.deepEqual(requests[1].body.messages.slice(-2), [
+        { role: 'assistant', content: null, tool_calls: [toolCall], reasoning_details: reasoningDetails },
+        { role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify([result]) }
+      ]);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+});
 
 describe('OpenRouter Message Splitting', () => {
   it('returns single chunk for text within limit', () => {

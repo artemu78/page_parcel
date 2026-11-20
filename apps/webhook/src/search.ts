@@ -4,7 +4,7 @@ import { UpstreamResponseError } from "@readable-web/observability";
 import type { SearchResult, SearchSession } from "@readable-web/jobs";
 
 export interface SearchClient {
-  search(query: string): Promise<SearchResult[]>;
+  search(query: string, signal?: AbortSignal): Promise<SearchResult[]>;
 }
 export function parseSearchResults(data: unknown): SearchResult[] {
   if (
@@ -47,13 +47,14 @@ export class SerperClient implements SearchClient {
     private apiKey = process.env.SERPER_API_KEY ?? "",
     private request: typeof fetch = fetch,
   ) {}
-  async search(query: string): Promise<SearchResult[]> {
+  async search(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
     if (!this.apiKey.trim())
       throw new UpstreamResponseError("Search not configured", "Serper", 503);
+    const timeout = AbortSignal.timeout(8000);
     const response = await this.request("https://google.serper.dev/search", {
       method: "POST",
       body: JSON.stringify({ q: query, num: 20, hl: "ru" }),
-      signal: AbortSignal.timeout(8000),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
       redirect: "error",
       headers: { "Content-Type": "application/json", "X-API-KEY": this.apiKey },
     });

@@ -1,5 +1,6 @@
 import { WebhookHandler } from '@readable-web/webhook/dist/handler.js';
-import { OpenRouterClient } from '@readable-web/webhook/dist/openrouter.js';
+import { LangGraphOpenRouterClient } from '@readable-web/webhook/dist/openrouter.js';
+import { SerperClient } from '@readable-web/webhook/dist/search.js';
 import { defaultLogger, configureExceptionReporting, installRuntimeExceptionHandlers, flushExceptionReports } from '@readable-web/observability';
 import { VkApiClient } from '@readable-web/vk';
 import { MemoryJobStore, YdbJobStore, MemoryConversationStore, MemoryQueueClient, OutboxService } from '@readable-web/jobs';
@@ -41,10 +42,14 @@ async function bootstrap() {
     logger
   });
 
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const serperKey = process.env.SERPER_API_KEY;
   const aiHandler = new WebhookHandler({
     jobStore, conversationStore, vkClient, logger,
     outboxService: new OutboxService({ jobStore, queueClient: new MemoryQueueClient() }),
-    openRouterClient: process.env.OPENROUTER_API_KEY ? new OpenRouterClient({ apiKey: process.env.OPENROUTER_API_KEY, logger }) : undefined,
+    openRouterClient: openRouterKey
+      ? new LangGraphOpenRouterClient({ apiKey: openRouterKey, logger }, serperKey?.trim() ? new SerperClient(serperKey) : undefined)
+      : undefined,
     validationOptions: { expectedGroupId: 0, confirmationCode: '' }
   });
   const server = new WorkerServer({

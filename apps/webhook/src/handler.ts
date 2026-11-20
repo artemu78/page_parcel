@@ -27,7 +27,7 @@ export interface WebhookHandlerOptions {
   jobStore: JobStore;
   outboxService: OutboxService;
   vkClient?: VkApiClient;
-  openRouterClient?: OpenRouterClient;
+  openRouterClient?: Pick<OpenRouterClient, 'complete'>;
   validationOptions: CallbackValidationOptions;
   logger?: Logger;
   maxUserRequestsPerMinute?: number;
@@ -36,7 +36,7 @@ export interface WebhookHandlerOptions {
 export class WebhookHandler {
   private publishAiRequest?: (message: AiQueueMessage) => Promise<void>;
   private conversationStore: ConversationStore;
-  private openRouterClient?: OpenRouterClient;
+  private openRouterClient?: Pick<OpenRouterClient, 'complete'>;
   private searchStore: SearchStore;
   private searchClient: SearchClient;
   private jobStore: JobStore;
@@ -406,7 +406,7 @@ export class WebhookHandler {
         model: selection?.model ?? defaultModelFor(ownerId, settings.openRouterModel),
         reasoningEffort: selection?.reasoningEffort, baseUrl: settings.openRouterBaseUrl,
         proxyUrl: settings.openRouterProxy, maxTokens: 2000,
-        systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. В этом режиме у тебя нет доступа к веб-поиску; не утверждай, что проверил актуальные сведения в интернете.' });
+        systemPrompt: 'Ты полезный собеседник. Отвечай на языке пользователя. Утверждай, что проверил сведения в интернете, только если использовал веб-поиск.' });
       await stopTyping();
       if (!reply.trim()) throw new UpstreamResponseError('Empty AI completion', 'OpenRouter', 200);
       const finished = await this.changeConversation(ownerId, state => {

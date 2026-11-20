@@ -154,8 +154,11 @@ risks. The API key is read from the environment/Lockbox and is never logged.
 Only enabled users in private dialogs can change modes or submit AI prompts.
 Mode is an explicit user selection; search remains the initial default. AI prompts
 and recent conversation history are sent to OpenRouter and the selected model
-provider. No web-fetching tools or credentials are included in model messages.
-AI output is sent as plain VK message text and never interpreted as bot commands.
+provider. When the worker has a Serper key, the model can send a bounded,
+model-generated public query to Serper. The tool returns titles, snippets, and
+validated links as untrusted data. It cannot fetch pages or access credentials.
+The graph keeps conversation content and tool results out of its state and
+stores no checkpoints. AI output is sent as plain VK message text and never interpreted as bot commands.
 Context is bounded and excluded after 24 hours, but the non-TTL conversation row
 can retain idle history until its next mutation. «Новый разговор» clears context
 and fences pending completions. Application logs and GitHub reports must not
@@ -176,8 +179,8 @@ containing fixed diagnostics and HTTP status, without provider/SDK message text.
 
 Queued AI processing stores the pending prompt in the same owner-bound YDB
 conversation row as history. Queue messages carry only an owner ID and event hash;
-worker trigger logs omit raw payload bodies. The worker receives the OpenRouter
-credential through Lockbox and uses the same runtime routing settings as the
+worker trigger logs omit raw payload bodies. The worker receives the OpenRouter and Serper
+credentials through Lockbox and uses the same runtime routing settings as the
 webhook. `/ai-status` exposes only the caller's fixed stage/failure metadata and
 correlation ID. Pending text is cleared on completion, reset or expiry handling;
 there is no native database TTL for that JSON field.
